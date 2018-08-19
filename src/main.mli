@@ -3,7 +3,7 @@ open! Import
 type setup =
   { build_system : Build_system.t
   ; contexts     : Context.t list
-  ; scontexts    : Super_context.t String_map.t
+  ; scontexts    : Super_context.t String.Map.t
   ; packages     : Package.t Package.Name.Map.t
   ; file_tree    : File_tree.t
   ; env          : Env.t
@@ -30,7 +30,7 @@ val external_lib_deps
   : ?log:Log.t
   -> packages:Package.Name.t list
   -> unit
-  -> Build.lib_deps Path.Map.t
+  -> Lib_deps_info.t Path.Map.t
 
 val find_context_exn : setup -> name:string -> Context.t
 

@@ -1,9 +1,76 @@
 next
 ----
 
+- Ignore stderr output when trying to find out the number of jobs
+  available (#1118, fix #1116, @diml)
+
+- Fix error message when the source directory of `copy_files` does not exist.
+  (#1120, fix #1099, @emillon)
+
+- Highlight error locations in error messages (#1121, @emillon)
+
+- Display actual stanza when package is ambiguous (#1126, fix #1123, @emillon)
+
+1.1.1 (08/08/2018)
+------------------
+
+- Fix `$ jbuilder --dev` (#1104, fixes #1103, @rgrinberg)
+
+- Fix dune exec when `--build-dir` is set to an absolute path (#1105, fixes
+  #1101, @rgrinberg)
+
+- Fix duplicate profile argument in suggested command when an external library
+  is missing (#1109, #1106, @emillon)
+
+- `-opaque` wasn't correctly being added to modules without an interface.
+  (#1108, fix #1107, @rgrinberg)
+
+- Fix validation of library `name` fields and make sure this validation also
+  applies when the `name` is derived from the `public_name`. (#1110, fix #1102,
+  @rgrinberg)
+
+- Fix a bug causing the toplevel `env` stanza in the workspace file to
+  be ignored when at least one context had `(merlin)` (#1114, @diml)
+
+1.1.0 (06/08/2018)
+------------------
+
 - Fix lookup of command line specified files when `--root` is given. Previously,
   passing in `--root` in conjunction with `--workspace` or `--config` would not
   work correctly (#997, @rgrinberg)
+
+- Add support for customizing env nodes in workspace files. The `env` stanza is
+  now allowed in toplevel position in the workspace file, or for individual
+  contexts. This feature requires `(dune lang 1.1)` (#1038, @rgrinberg)
+
+- Add `enabled_if` field for aliases and tests. This field controls whether the
+  test will be ran using a boolean expression language. (#819, @rgrinberg)
+
+- Make `name`, `names` fields optional when a `public_name`, `public_names`
+  field is provided. (#1041, fix #1000, @rgrinberg)
+
+- Interpret `X` in `--libdir X` as relative to `PREFIX` when `X` is relative
+  (#1072, fix #1070, @diml)
+
+- Add support for multi directory libraries by writing
+  `(include_subdirs unqualified)` (#1034, @diml)
+
+- Add `(staged_pps ...)` to support staged ppx rewriters such as ones
+  using the OCaml typer like `ppx_import` (#1080, fix #193, @diml)
+
+- Use `-opaque` in the `dev` profile. This option trades off binary quality for
+  compilation speed when compiling .cmx files. (#1079, fix #1058, @rgrinberg)
+
+- Fix placeholders in `dune subst` documentation (#1090, @emillon, thanks
+  @trefis for the bug report)
+
+- Add locations to errors when a missing binary in PATH comes from a dune file
+  (#1096, fixes #1095, @rgrinberg)
+
+1.0.1 (19/07/2018)
+------------------
+
+- Fix parsing of `%{lib:name:file}` forms (#1022, fixes #1019, @diml)
 
 1.0.0 (10/07/2018)
 ------------------

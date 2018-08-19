@@ -6,7 +6,7 @@
 *)
 
 open Import
-open Jbuild
+open Dune_file
 
 (** A directory with a jbuild *)
 module Dir_with_jbuild : sig
@@ -43,6 +43,7 @@ val create
 
 val context   : t -> Context.t
 val stanzas   : t -> Dir_with_jbuild.t list
+val stanzas_in : t -> dir:Path.t -> Dir_with_jbuild.t option
 val packages  : t -> Package.t Package.Name.Map.t
 val libs_by_package : t -> (Package.t * Lib.Set.t) Package.Name.Map.t
 val file_tree : t -> File_tree.t
@@ -78,6 +79,14 @@ val dump_env : t -> dir:Path.t -> (unit, Sexp.t list) Build.t
 val find_scope_by_dir  : t -> Path.t              -> Scope.t
 val find_scope_by_name : t -> Dune_project.Name.t -> Scope.t
 
+val expand_vars
+  :  t
+  -> mode:'a String_with_vars.Mode.t
+  -> scope:Scope.t
+  -> dir:Path.t -> ?bindings:Pform.Map.t
+  -> String_with_vars.t
+  -> 'a
+
 val expand_vars_string
   :  t
   -> scope:Scope.t
@@ -112,7 +121,7 @@ val prefix_rules
 val add_rule
   :  t
   -> ?sandbox:bool
-  -> ?mode:Jbuild.Rule.Mode.t
+  -> ?mode:Dune_file.Rule.Mode.t
   -> ?locks:Path.t list
   -> ?loc:Loc.t
   -> (unit, Action.t) Build.t
@@ -120,7 +129,7 @@ val add_rule
 val add_rule_get_targets
   :  t
   -> ?sandbox:bool
-  -> ?mode:Jbuild.Rule.Mode.t
+  -> ?mode:Dune_file.Rule.Mode.t
   -> ?locks:Path.t list
   -> ?loc:Loc.t
   -> (unit, Action.t) Build.t
@@ -139,6 +148,7 @@ val add_alias_deps
 val add_alias_action
   :  t
   -> Build_system.Alias.t
+  -> loc:Loc.t option
   -> ?locks:Path.t list
   -> stamp:Sexp.t
   -> (unit, Action.t) Build.t
@@ -161,6 +171,7 @@ val source_files : t -> src_path:Path.t -> String.Set.t
 val resolve_program
   :  t
   -> ?hint:string
+  -> loc:Loc.t option
   -> string
   -> Action.Prog.t
 
@@ -187,6 +198,8 @@ module Libs : sig
   (** [file_deps t libs ~ext] returns a list of path dependencies for
       all the files with extension [ext] of libraries [libs]. *)
   val file_deps : t -> Lib.L.t -> ext:string -> Path.t list
+
+  val file_deps_with_exts : t -> (Lib.t * string) list -> Path.t list
 
   (** Setup the alias that depends on all files with a given extension
       for a library *)
@@ -240,11 +253,12 @@ module Action : sig
     :  t
     -> loc:Loc.t
     -> bindings:Pform.Map.t
-    -> Action.Unexpanded.t
     -> dir:Path.t
-    -> dep_kind:Build.lib_dep_kind
+    -> dep_kind:Lib_deps_info.Kind.t
     -> targets:targets
+    -> targets_dir:Path.t
     -> scope:Scope.t
+    -> Action.Unexpanded.t
     -> (Path.t Bindings.t, Action.t) Build.t
 end
 
@@ -257,3 +271,5 @@ module Scope_key : sig
 
   val to_string : string -> Dune_project.Name.t -> string
 end
+
+val opaque : t -> bool

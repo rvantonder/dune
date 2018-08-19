@@ -40,7 +40,7 @@ module Map : sig
   val superpose : t -> t -> t
 
   (** Map with all named values as [Named_local] *)
-  val of_bindings : _ Jbuild.Bindings.t -> t
+  val of_bindings : _ Dune_file.Bindings.t -> t
 
   val singleton : string -> Var.t -> t
 
@@ -48,11 +48,7 @@ module Map : sig
 
   val input_file : Path.t -> t
 
-  val expand
-    :  t
-    -> syntax_version:Syntax.Version.t
-    -> pform:String_with_vars.Var.t
-    -> Expansion.t option
+  val expand : t -> Expansion.t option String_with_vars.expander
 
   val empty : t
 end

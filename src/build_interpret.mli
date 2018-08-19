@@ -15,7 +15,7 @@ module Rule : sig
     ; build    : (unit, Action.t) Build.t
     ; targets  : Target.t list
     ; sandbox  : bool
-    ; mode     : Jbuild.Rule.Mode.t
+    ; mode     : Dune_file.Rule.Mode.t
     ; locks    : Path.t list
     ; loc      : Loc.t option
     ; (** Directory where all the targets are produced *)
@@ -24,7 +24,7 @@ module Rule : sig
 
   val make
     :  ?sandbox:bool
-    -> ?mode:Jbuild.Rule.Mode.t
+    -> ?mode:Dune_file.Rule.Mode.t
     -> context:Context.t option
     -> ?locks:Path.t list
     -> ?loc:Loc.t
@@ -48,7 +48,7 @@ val static_deps
 
 val lib_deps
   :  (_, _) Build.t
-  -> Build.lib_deps
+  -> Lib_deps_info.t
 
 val targets
   :  (_, _) Build.t

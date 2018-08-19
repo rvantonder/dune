@@ -19,13 +19,24 @@ end = struct
   let file dir t = Path.append dir t
 end
 
+(* Arguments for the compiler to prevent it from being too clever.
+
+   The compiler creates the cmi when it thinks a .ml file has no
+   corresponding .mli. However this behavior is a bit racy and doesn't
+   work well when the extension is not .ml or when the .ml and .mli
+   are in different directories. This flags makes the compiler think
+   there is a .mli file and will the read the cmi file rather than
+   create it. *)
+let force_read_cmi source_file =
+  [ "-intf-suffix"; Path.extension source_file ]
+
 let build_cm cctx ?sandbox ?(dynlink=true) ~dep_graphs ~cm_kind (m : Module.t) =
   let sctx     = CC.super_context cctx in
   let dir      = CC.dir           cctx in
   let obj_dir  = CC.obj_dir       cctx in
   let ctx      = SC.context       sctx in
   Option.iter (Mode.of_cm_kind cm_kind |> Context.compiler ctx) ~f:(fun compiler ->
-    Option.iter (Module.cm_source ~dir m cm_kind) ~f:(fun src ->
+    Option.iter (Module.cm_source m cm_kind) ~f:(fun src ->
       let ml_kind = Cm_kind.source cm_kind in
       let dst = Module.cm_file_unsafe m ~obj_dir cm_kind in
       let extra_args, extra_deps, other_targets =
@@ -35,19 +46,11 @@ let build_cm cctx ?sandbox ?(dynlink=true) ~dep_graphs ~cm_kind (m : Module.t) =
            and to produce the cmx we have to wait to avoid race
            conditions. *)
         | Cmo, None -> [], [], [Target.cm m Cmi]
-        | Cmx, None ->
-          (* Change [-intf-suffix] so that the compiler thinks the
-             cmi exists and reads it instead of re-creating it, which
-             could create a race condition. *)
-          [ "-intf-suffix"
-          ; Filename.extension (Option.value_exn m.impl).name
-          ],
+        | (Cmo | Cmx), _ ->
+          force_read_cmi src,
           [Module.cm_file_unsafe m ~obj_dir Cmi],
           []
-        | Cmi, None -> assert false
-        | Cmi, Some _ -> [], [], []
-        (* We need the .cmi to build either the .cmo or .cmx *)
-        | (Cmo | Cmx), Some _ -> [], [Module.cm_file_unsafe m ~obj_dir Cmi], []
+        | Cmi, _ -> [], [], []
       in
       let other_targets =
         match cm_kind with
@@ -55,13 +58,14 @@ let build_cm cctx ?sandbox ?(dynlink=true) ~dep_graphs ~cm_kind (m : Module.t) =
         | Cmi | Cmo -> other_targets
       in
       let dep_graph = Ml_kind.Dict.get dep_graphs ml_kind in
+      let opaque = CC.opaque cctx in
       let other_cm_files =
         Build.dyn_paths
           (Ocamldep.Dep_graph.deps_of dep_graph m >>^ fun deps ->
            List.concat_map deps
              ~f:(fun m ->
                let deps = [Module.cm_file_unsafe m ~obj_dir Cmi] in
-               if Module.has_impl m && cm_kind = Cmx then
+               if Module.has_impl m && cm_kind = Cmx && not opaque then
                  Module.cm_file_unsafe m ~obj_dir Cmx :: deps
                else
                  deps))
@@ -83,34 +87,45 @@ let build_cm cctx ?sandbox ?(dynlink=true) ~dep_graphs ~cm_kind (m : Module.t) =
           let in_dir = Target.file dir target in
           SC.add_rule sctx (Build.symlink ~src:in_obj_dir ~dst:in_dir))
       end;
-      let opaque =
-        if cm_kind = Cmi && not (Module.has_impl m) && ctx.version >= (4, 03, 0) then
+      let opaque_arg =
+        let intf_only = cm_kind = Cmi && not (Module.has_impl m) in
+        if opaque
+        || (intf_only && Ocaml_version.supports_opaque_for_mli ctx.version) then
           Arg_spec.A "-opaque"
         else
           As []
       in
       let dir, no_keep_locs =
         if CC.no_keep_locs cctx && cm_kind = Cmi then begin
-          if ctx.version < (4, 03, 0) then
-            (obj_dir, Arg_spec.As [])
+          if Ocaml_version.supports_no_keep_locs ctx.version then
+            (ctx.build_dir, Arg_spec.As ["-no-keep-locs"])
           else
-            (ctx.build_dir, As ["-no-keep-locs"])
+            (obj_dir, As [])
         end else
           (ctx.build_dir, As [])
+      in
+      let flags =
+        let flags = Ocaml_flags.get_for_cm (CC.flags cctx) ~cm_kind in
+        match m.pp with
+        | None -> flags
+        | Some pp ->
+          Build.fanout flags pp >>^ fun (flags, pp_flags) ->
+          flags @ pp_flags
       in
       SC.add_rule sctx ?sandbox
         (Build.paths extra_deps >>>
          other_cm_files >>>
-         Ocaml_flags.get_for_cm (CC.flags cctx) ~cm_kind >>>
+         flags
+         >>>
          Build.run ~dir ~context:ctx (Ok compiler)
-           [ Dyn (fun ocaml_flags -> As ocaml_flags)
+           [ Dyn (fun flags -> As flags)
            ; no_keep_locs
            ; cmt_args
            ; A "-I"; Path obj_dir
            ; Cm_kind.Dict.get (CC.includes cctx) cm_kind
            ; As extra_args
            ; if dynlink || cm_kind <> Cmx then As [] else A "-nodynlink"
-           ; A "-no-alias-deps"; opaque
+           ; A "-no-alias-deps"; opaque_arg
            ; (match CC.alias_module cctx with
               | None -> S []
               | Some (m : Module.t) ->
@@ -126,7 +141,6 @@ let build_module ?sandbox ?js_of_ocaml ?dynlink ~dep_graphs cctx m =
   Option.iter js_of_ocaml ~f:(fun js_of_ocaml ->
     (* Build *.cmo.js *)
     let sctx     = CC.super_context cctx in
-    let scope    = CC.scope         cctx in
     let dir      = CC.dir           cctx in
     let obj_dir  = CC.obj_dir       cctx in
     let src = Module.cm_file_unsafe m ~obj_dir Cm_kind.Cmo in
@@ -135,7 +149,7 @@ let build_module ?sandbox ?js_of_ocaml ?dynlink ~dep_graphs cctx m =
         ~suffix:".js"
     in
     SC.add_rules sctx
-      (Js_of_ocaml_rules.build_cm sctx ~scope ~dir ~js_of_ocaml ~src ~target))
+      (Js_of_ocaml_rules.build_cm cctx ~js_of_ocaml ~src ~target))
 
 let build_modules ?sandbox ?js_of_ocaml ?dynlink ~dep_graphs cctx =
   Module.Name.Map.iter
@@ -146,10 +160,9 @@ let build_modules ?sandbox ?js_of_ocaml ?dynlink ~dep_graphs cctx =
 
 let ocamlc_i ?sandbox ?(flags=[]) ~dep_graphs cctx (m : Module.t) ~output =
   let sctx     = CC.super_context cctx in
-  let dir      = CC.dir           cctx in
   let obj_dir  = CC.obj_dir       cctx in
   let ctx      = SC.context       sctx in
-  let src = Option.value_exn (Module.file ~dir m Impl) in
+  let src = Option.value_exn (Module.file m Impl) in
   let dep_graph = Ml_kind.Dict.get dep_graphs Impl in
   let cm_deps =
     Build.dyn_paths

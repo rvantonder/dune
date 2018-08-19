@@ -57,6 +57,11 @@ allowed to write an explicit ``Foo`` module, in which case this will
 be the interface of the library and you are free to expose only the
 modules you want.
 
+Note that by default libraries and other things that consume
+OCaml/Reason modules only consume modules from the directory where the
+stanza appear. In order to declare a multi-directory library, you need
+to use the :ref:`include_subdirs` stanza.
+
 ``<optional-fields>`` are:
 
 - ``(public_name <name>)`` this is the name under which the library can be
@@ -199,9 +204,9 @@ format of executable stanzas is as follows:
 .. code:: scheme
 
     (executable
-      ((name <name>)
-       <optional-fields>
-      ))
+      (name <name>)
+      <optional-fields>
+    )
 
 ``<name>`` is a module name that contains the main entry point of the
 executable. There can be additional modules in the current directory, you only
@@ -488,7 +493,7 @@ stanza is rejected by dune:
 ocamllex
 --------
 
-``(ocamllex (<names>))`` is essentially a shorthand for:
+``(ocamllex <names>)`` is essentially a shorthand for:
 
 .. code:: scheme
 
@@ -503,13 +508,13 @@ To use a different rule mode, use the long form:
 .. code:: scheme
 
     (ocamllex
-      (modules (<names>))
+      (modules <names>)
       (mode    <mode>))
 
 ocamlyacc
 ---------
 
-``(ocamlyacc (<names>))`` is essentially a shorthand for:
+``(ocamlyacc <names>)`` is essentially a shorthand for:
 
 .. code:: scheme
 
@@ -524,7 +529,7 @@ To use a different rule mode, use the long form:
 .. code:: scheme
 
     (ocamlyacc
-      (modules (<names>))
+      (modules <names>)
       (mode    <mode>))
 
 menhir
@@ -568,6 +573,10 @@ The syntax is as follows:
 
 - ``(locks (<lock-names>))`` specify that the action must be run while
   holding the following locks. See the `Locks`_ section for more details.
+
+- ``(enabled_if <blang expression>)`` specifies the boolean condition that must
+  be true for the tests to run. The condition is specified using the blang_, and
+  the field allows for variables_ to appear in the expressions.
 
 The typical use of the ``alias`` stanza is to define tests:
 
@@ -783,6 +792,45 @@ A directory that is ignored will not be eagerly scanned by Dune. Any
 will be treated as raw data. It is however possible to depend on files
 inside ignored sub-directories.
 
+.. _include_subdirs:
+
+include_subdirs
+---------------
+
+The ``include_subdirs`` stanza is used to control how dune considers
+sub-directories of the current directory. The syntax is as follow:
+
+.. code:: scheme
+
+     (include_subdirs <mode>)
+
+Where ``<mode>`` maybe be one of:
+
+- ``no``, the default
+- ``unqualified``
+
+When the ``include_subdirs`` stanza is not present or ``<mode>`` is
+``no``, dune considers sub-directories as independent. When ``<mode>``
+is ``unqualified``, dune will assume that the sub-directories of the
+current directory are part of the same group of directories. In
+particular, dune will scan all these directories at once when looking
+for OCaml/Reason files. This allows you to split a library between
+several directories. ``unqualified`` means that modules in
+sub-directories are seen as if they were all in the same directory. In
+particular, you cannot have two modules with the same name in two
+different directories. It is planned to add a ``qualified`` mode in
+the future.
+
+Note that sub-directories are included recursively, however the
+recursion will stop when encountering a sub-directory that contains
+another ``include_subdirs`` stanza. Additionally, it is not allowed
+for a sub-directory of a directory with ``(include_subdirs <x>)``
+where ``<x>`` is not ``no`` to contain one of the following stanzas:
+
+- ``library``
+- ``executable(s)``
+- ``test(s)``
+
 Common items
 ============
 
@@ -823,6 +871,36 @@ doesn't start by `-`, you can simply quote it: ``("x" y z)``.
 
 Most fields using the ordered set language also support `Variables expansion`_.
 Variables are expanded after the set language is interpreted.
+
+.. _blang:
+
+Boolean Language
+----------------
+
+The boolean language allows the user to define simple boolean expressions that
+dune can evaluate. Here's a semi formal specification of the language:
+
+.. code::
+
+   op := '=' | '<' | '>' | '<>' | '>=' | '<='
+
+   expr := (and <expr>+)
+         | (or <expr>+)
+         | (<op> <template> <template>)
+         | <template>
+
+After an expression is evaluated, it must be exactly the string ``true`` or
+``false`` to be considered as a boolean. Any other value will be treated as an
+error.
+
+Here's a simple example of a condition that expresses running on OSX and having
+an flambda compiler with the help of variable expansion:
+
+.. code:: scheme
+
+   (and %{ocamlc-config:flambda} (= %{ocamlc-config:system} macosx))
+
+.. _variables:
 
 Variables expansion
 -------------------
@@ -1031,9 +1109,31 @@ Dune accepts three kinds of preprocessing:
 - ``(action <action>)`` to preprocess files using the given action
 - ``(pps <ppx-rewriters-and-flags>)`` to preprocess files using the given list
   of ppx rewriters
+- ``(staged_pps <ppx-rewriters-and-flags>)`` is similar to ``(pps
+    ...)`` but behave slightly differently and is needed for certain
+    ppx rewriters (see below for details)
 
-Note that in any cases, files are preprocessed only once. Dune doesn't use
-the ``-pp`` or ``-ppx`` of the various OCaml tools.
+Dune normally assumes that the compilation pipeline is sequenced as
+follow:
+
+- code generation (including preprocessing)
+- dependency analysis
+- compilation
+
+Dune uses this fact to optimize the pipeline and in particular share
+the result of code generation and preprocessing between the dependency
+analysis and compilation phases. However, some specific code
+generators or preprocessors require feedback from the compilation
+phase. As a result they must be applied in stages as follows:
+
+- first stage of code geneneration
+- dependency analysis
+- second step of code generation in parallel with compilation
+
+This is the case for ppx rewriters using the OCaml typer for
+instance. When using such ppx rewriters, you must use ``staged_pps``
+instead of ``pps`` in order to force Dune to use the second pipeline,
+which is slower but necessary in this case.
 
 Preprocessing with actions
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1231,22 +1331,8 @@ follows:
 js_of_ocaml
 -----------
 
-In ``library`` and ``executables`` stanzas, you can specify js_of_ocaml options
-using ``(js_of_ocaml (<js_of_ocaml-options>))``.
-
-``<js_of_ocaml-options>`` are all optional:
-
-- ``(flags <flags>)`` to specify flags passed to ``js_of_ocaml``. This field
-  supports ``(:include ...)`` forms
-
-- ``(javascript_files (<files-list>))`` to specify ``js_of_ocaml`` JavaScript
-  runtime files.
-
-``<flags>`` is specified in the `Ordered set language`_.
-
-The default value for ``(flags ...)`` depends on the selected build
-profile. The build profile ``dev`` (the default) will enable sourcemap
-and the pretty JavaScript output.
+A :ref:`dune-jsoo-field` exists in executable and libraries stanzas that allows
+one to customize options relevant to jsoo.
 
 .. _user-actions:
 

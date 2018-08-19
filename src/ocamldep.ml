@@ -60,6 +60,7 @@ module Dep_graphs = struct
 end
 
 let parse_module_names ~(unit : Module.t) ~modules words =
+  let open Module.Name.Infix in
   List.filter_map words ~f:(fun m ->
     let m = Module.Name.of_string m in
     if m = unit.name then
@@ -68,6 +69,7 @@ let parse_module_names ~(unit : Module.t) ~modules words =
       Module.Name.Map.find modules m)
 
 let is_alias_module cctx (m : Module.t) =
+  let open Module.Name.Infix in
   match CC.alias_module cctx with
   | None -> false
   | Some alias -> alias.name = m.name
@@ -103,6 +105,7 @@ let parse_deps cctx ~file ~unit lines =
       (match lib_interface_module with
        | None -> ()
        | Some (m : Module.t) ->
+         let open Module.Name.Infix in
          if unit.name <> m.name && not (is_alias_module cctx unit) &&
             List.exists deps ~f:(fun x -> Module.name x = m.name) then
            die "Module %a in directory %s depends on %a.\n\
@@ -122,11 +125,10 @@ let parse_deps cctx ~file ~unit lines =
 
 let deps_of cctx ~ml_kind unit =
   let sctx = CC.super_context cctx in
-  let dir  = CC.dir           cctx in
   if is_alias_module cctx unit then
     Build.return []
   else
-    match Module.file ~dir unit ml_kind with
+    match Module.file unit ml_kind with
     | None -> Build.return []
     | Some file ->
       let file_in_obj_dir ~suffix file =
@@ -138,9 +140,15 @@ let deps_of cctx ~ml_kind unit =
       let all_deps_file = all_deps_path file in
       let ocamldep_output = file_in_obj_dir file ~suffix:".d" in
       SC.add_rule sctx
-        ( Build.run ~context (Ok context.ocamldep)
-            [A "-modules"; Ml_kind.flag ml_kind; Dep file]
-            ~stdout_to:ocamldep_output
+        (let flags = Option.value unit.pp ~default:(Build.return []) in
+         flags >>>
+         Build.run ~context (Ok context.ocamldep)
+           [ A "-modules"
+           ; Dyn (fun flags -> As flags)
+           ; Ml_kind.flag ml_kind
+           ; Dep file
+           ]
+           ~stdout_to:ocamldep_output
         );
       let build_paths dependencies =
         let dependency_file_path m =
@@ -148,9 +156,9 @@ let deps_of cctx ~ml_kind unit =
             if is_alias_module cctx m then
               None
             else
-              match Module.file ~dir m Ml_kind.Intf with
+              match Module.file m Ml_kind.Intf with
               | Some _ as x -> x
-              | None -> Module.file ~dir m Ml_kind.Impl
+              | None -> Module.file m Ml_kind.Impl
           in
           Option.map path ~f:all_deps_path
         in

@@ -11,6 +11,7 @@ module Prog : sig
       { context : string
       ; program : string
       ; hint    : string option
+      ; loc     : Loc.t option
       }
 
     val raise : t -> _
@@ -54,7 +55,7 @@ module Unresolved : sig
   module Program : sig
     type t =
       | This   of Path.t
-      | Search of string
+      | Search of Loc.t option * string
   end
 
   include Action_intf.Ast
@@ -62,7 +63,7 @@ module Unresolved : sig
     with type path    := Path.t
     with type string  := string
 
-  val resolve : t -> f:(string -> Path.t) -> action
+  val resolve : t -> f:(Loc.t option -> string -> Path.t) -> action
 end with type action := t
 
 module Unexpanded : sig
@@ -83,7 +84,7 @@ module Unexpanded : sig
       :  t
       -> dir:Path.t
       -> map_exe:(Path.t -> Path.t)
-      -> f:(String_with_vars.Var.t -> Syntax.Version.t -> Value.t list option)
+      -> f:(Value.t list option String_with_vars.expander)
       -> Unresolved.t
   end
 
@@ -91,19 +92,9 @@ module Unexpanded : sig
     :  t
     -> dir:Path.t
     -> map_exe:(Path.t -> Path.t)
-    -> f:(String_with_vars.Var.t -> Syntax.Version.t -> Value.t list option)
+    -> f:(Value.t list option String_with_vars.expander)
     -> Partial.t
 end
-
-val exec : targets:Path.Set.t -> context:Context.t option -> t -> unit Fiber.t
-
-(* Return a sandboxed version of an action *)
-val sandbox
-  :  t
-  -> sandboxed:(Path.t -> Path.t)
-  -> deps:Path.t list
-  -> targets:Path.t list
-  -> t
 
 (** Infer dependencies and targets.
 
@@ -127,20 +118,10 @@ module Infer : sig
   val unexpanded_targets : Unexpanded.t -> String_with_vars.t list
 end
 
-module Promotion : sig
-  module File : sig
-    type t =
-      { src : Path.t
-      ; dst : Path.t
-      }
-
-    (** Register a file to promote *)
-    val register : t -> unit
-  end
-
-  (** Promote all registered files if [!Clflags.auto_promote]. Otherwise dump the list of
-      registered files to [_build/.to-promote]. *)
-  val finalize : unit -> unit
-
-  val promote_files_registered_in_last_run : unit -> unit
-end
+(** Return a sandboxed version of an action *)
+val sandbox
+  :  t
+  -> sandboxed:(Path.t -> Path.t)
+  -> deps:Path.t list
+  -> targets:Path.t list
+  -> t

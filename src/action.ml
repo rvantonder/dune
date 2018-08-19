@@ -1,6 +1,8 @@
 open Import
 open Sexp.Of_sexp
 
+let ignore_loc k ~loc:_ = k
+
 module Outputs = struct
   include Action_intf.Outputs
 
@@ -28,29 +30,35 @@ struct
     Sexp.Of_sexp.fix (fun t ->
       sum
         [ "run",
-          (Program.t     >>= fun prog ->
-           repeat string >>| fun args ->
+          (let%map prog = Program.t
+           and args = repeat string
+           in
            Run (prog, args))
         ; "chdir",
-          (path >>= fun dn ->
-           t    >>| fun t ->
+          (let%map dn = path
+           and t = t
+           in
            Chdir (dn, t))
         ; "setenv",
-          (string >>= fun k ->
-           string >>= fun v ->
-           t      >>| fun t ->
+          (let%map k = string
+           and v = string
+           and t = t
+           in
            Setenv (k, v, t))
         ; "with-stdout-to",
-          (path >>= fun fn ->
-           t    >>| fun t ->
+          (let%map fn = path
+           and t = t
+           in
            Redirect (Stdout, fn, t))
         ; "with-stderr-to",
-          (path >>= fun fn ->
-           t    >>| fun t  ->
+          (let%map fn = path
+           and t = t
+           in
            Redirect (Stderr, fn, t))
         ; "with-outputs-to",
-          (path >>= fun fn ->
-           t    >>| fun t  ->
+          (let%map fn = path
+           and t = t
+           in
            Redirect (Outputs, fn, t))
         ; "ignore-stdout",
           (t >>| fun t -> Ignore (Stdout, t))
@@ -61,35 +69,41 @@ struct
         ; "progn",
           (repeat t >>| fun l -> Progn l)
         ; "echo",
-          (string >>= fun x ->
-           repeat string >>| fun xs ->
+          (let%map x = string
+           and xs = repeat string
+           in
            Echo (x :: xs))
         ; "cat",
           (path >>| fun x -> Cat x)
         ; "copy",
-          (path >>= fun src ->
-           path >>| fun dst ->
+          (let%map src = path
+           and dst = path
+           in
            Copy (src, dst))
         ; "copy#",
-          (path >>= fun src ->
-           path >>| fun dst ->
+          (let%map src = path
+           and dst = path
+           in
            Copy_and_add_line_directive (src, dst))
         ; "copy-and-add-line-directive",
-          (path >>= fun src ->
-           path >>| fun dst ->
+          (let%map src = path
+           and dst = path
+           in
            Copy_and_add_line_directive (src, dst))
         ; "system",
           (string >>| fun cmd -> System cmd)
         ; "bash",
           (string >>| fun cmd -> Bash cmd)
         ; "write-file",
-          (path >>= fun fn ->
-           string >>| fun s ->
+          (let%map fn = path
+           and s = string
+           in
            Write_file (fn, s))
         ; "diff",
-          (path >>= fun file1 ->
-           path >>= fun file2 ->
-           Stanza.file_kind () >>| fun kind ->
+          (let%map file1 = path
+           and file2 = path
+           and kind = Stanza.file_kind ()
+           in
            let mode =
              match kind with
              | Jbuild -> Diff_mode.Text_jbuild
@@ -97,9 +111,10 @@ struct
            in
            Diff { optional = false; file1; file2; mode })
         ; "diff?",
-          (path >>= fun file1 ->
-           path >>= fun file2 ->
-           Stanza.file_kind () >>| fun kind ->
+          (let%map file1 = path
+           and file2 = path
+           and kind = Stanza.file_kind ()
+           in
            let mode =
              match kind with
              | Jbuild -> Diff_mode.Text_jbuild
@@ -107,9 +122,10 @@ struct
            in
            Diff { optional = true; file1; file2; mode })
         ; "cmp",
-          (Syntax.since Stanza.syntax (1, 0) >>= fun () ->
-           path >>= fun file1 ->
-           path >>| fun file2 ->
+          (let%map () = Syntax.since Stanza.syntax (1, 0)
+           and file1 = path
+           and file2 = path
+           in
            Diff { optional = false; file1; file2; mode = Binary })
         ])
 
@@ -243,10 +259,11 @@ module Prog = struct
       { context : string
       ; program : string
       ; hint    : string option
+      ; loc     : Loc.t option
       }
 
-    let raise { context ; program ; hint } =
-      Utils.program_not_found ?hint ~context program
+    let raise { context ; program ; hint ; loc } =
+      Utils.program_not_found ?hint ~loc ~context program
   end
 
   type t = (Path.t, Not_found.t) result
@@ -306,13 +323,13 @@ module Unresolved = struct
   module Program = struct
     type t =
       | This   of Path.t
-      | Search of string
+      | Search of Loc.t option * string
 
-    let of_string ~dir s =
+    let of_string ~dir ~loc s =
       if String.contains s '/' then
         This (Path.relative dir s)
       else
-        Search s
+        Search (loc, s)
   end
 
   module type Uast = Action_intf.Ast
@@ -331,18 +348,20 @@ module Unresolved = struct
       ~f_string:(fun ~dir:_ x -> x)
       ~f_program:(fun ~dir:_ -> function
         | This p -> Ok p
-        | Search s -> Ok (f s))
+        | Search (loc, s) -> Ok (f loc s))
 end
 
-let prog_and_args_of_values p ~dir =
+let prog_and_args_of_values ~loc p ~dir =
   match p with
-  | [] -> (Unresolved.Program.Search "", [])
+  | [] -> (Unresolved.Program.Search (loc, ""), [])
   | Value.Dir p :: _ ->
     die "%s is a directory and cannot be used as an executable"
       (Path.to_string_maybe_quoted p)
   | Value.Path p :: xs -> (This p, Value.L.to_strings ~dir xs)
   | String s :: xs ->
-    (Unresolved.Program.of_string ~dir s, Value.L.to_strings ~dir xs)
+    ( Unresolved.Program.of_string ~loc ~dir s
+    , Value.L.to_strings ~dir xs
+    )
 
 module Unexpanded = struct
   module type Uast = Action_intf.Ast
@@ -354,12 +373,13 @@ module Unexpanded = struct
   include Make_ast(String_with_vars)(String_with_vars)(String_with_vars)(Uast)
 
   let t =
-    let open Sexp.Of_sexp in
-    peek_exn >>= function
-    | Template _ | Atom _ | Quoted_string _ as sexp ->
-      of_sexp_errorf (Sexp.Ast.loc sexp)
-        "if you meant for this to be executed with bash, write (bash \"...\") instead"
-    | List _ -> t
+    if_list
+      ~then_:t
+      ~else_:
+        (loc >>| fun loc ->
+         of_sexp_errorf
+           loc
+           "if you meant for this to be executed with bash, write (bash \"...\") instead")
 
   let check_mkdir loc path =
     if not (Path.is_managed path) then
@@ -383,17 +403,19 @@ module Unexpanded = struct
     module E = struct
       let expand ~dir ~mode ~f ~l ~r =
         Either.map ~l
-          ~r:(fun s -> r (String_with_vars.expand s ~dir ~f ~mode) ~dir)
+          ~r:(fun s ->
+            r ~loc:(Some (String_with_vars.loc s))
+              (String_with_vars.expand s ~dir ~f ~mode) ~dir)
 
       let string =
         expand ~mode:Single
           ~l:(fun x -> x)
-          ~r:Value.to_string
+          ~r:(ignore_loc Value.to_string)
 
       let strings =
         expand ~mode:Many
           ~l:(fun x -> [x])
-          ~r:Value.L.to_strings
+          ~r:(ignore_loc Value.L.to_strings)
 
       let path e =
         let error_loc =
@@ -402,7 +424,7 @@ module Unexpanded = struct
           | Right r -> Some (String_with_vars.loc r) in
         expand ~mode:Single
           ~l:(fun x -> x)
-          ~r:Value.(to_path ?error_loc) e
+          ~r:(ignore_loc (Value.(to_path ?error_loc))) e
 
       let prog_and_args =
         expand ~mode:Many
@@ -473,15 +495,17 @@ module Unexpanded = struct
   module E = struct
     let expand ~dir ~mode ~f ~map x =
       match String_with_vars.partial_expand ~mode ~dir ~f x with
-      | Expanded e -> Left (map e ~dir)
+      | Expanded e ->
+        let loc = Some (String_with_vars.loc x) in
+        Left (map ~loc e ~dir)
       | Unexpanded x -> Right x
 
-    let string = expand ~mode:Single ~map:Value.to_string
-    let strings = expand ~mode:Many ~map:Value.L.to_strings
-    let cat_strings = expand ~mode:Many ~map:Value.L.concat
+    let string = expand ~mode:Single ~map:(ignore_loc Value.to_string)
+    let strings = expand ~mode:Many ~map:(ignore_loc Value.L.to_strings)
+    let cat_strings = expand ~mode:Many ~map:(ignore_loc Value.L.concat)
     let path x =
-      let error_loc = String_with_vars.loc x in
-      expand ~mode:Single ~map:(Value.to_path ~error_loc) x
+      expand ~mode:Single ~map:(fun ~loc v ~dir ->
+        Value.to_path ?error_loc:loc v ~dir) x
     let prog_and_args = expand ~mode:Many ~map:prog_and_args_of_values
   end
 
@@ -516,7 +540,7 @@ module Unexpanded = struct
           let loc = String_with_vars.loc fn in
           Loc.fail loc
             "This directory cannot be evaluated statically.\n\
-             This is not allowed by jbuilder"
+             This is not allowed by dune"
       end
     | Setenv (var, value, t) ->
       Setenv (E.string ~dir ~f var, E.string ~dir ~f value,
@@ -597,359 +621,6 @@ let chdirs =
     fold_one_step t ~init:acc ~f:loop
   in
   fun t -> loop Path.Set.empty t
-
-open Fiber.O
-
-let get_std_output : _ -> Process.std_output_to = function
-  | None          -> Terminal
-  | Some (fn, oc) ->
-    Opened_file { filename = fn
-                ; tail = false
-                ; desc = Channel oc }
-
-module Promotion = struct
-  module File = struct
-    type t =
-      { src : Path.t
-      ; dst : Path.t
-      }
-
-    (* XXX these sexp converters will be useful for the dump command *)
-    let _t =
-      let open Sexp.Of_sexp in
-      peek_exn >>= function
-      | List (_, [_; Atom (_, A "as"); _]) ->
-        enter
-          (Path.t >>= fun src ->
-           junk >>= fun () ->
-           Path.t >>= fun dst ->
-           return { src; dst })
-      | sexp ->
-        Sexp.Of_sexp.of_sexp_errorf (Sexp.Ast.loc sexp)
-          "(<file> as <file>) expected"
-
-    let _sexp_of_t { src; dst } =
-      Sexp.List [Path.sexp_of_t src; Sexp.unsafe_atom_of_string "as";
-                 Path.sexp_of_t dst]
-
-    let db : t list ref = ref []
-
-    let register t = db := t :: !db
-
-    let promote { src; dst } =
-      Format.eprintf "Promoting %s to %s.@."
-        (Path.to_string_maybe_quoted src)
-        (Path.to_string_maybe_quoted dst);
-      Io.copy_file ~src ~dst ()
-  end
-
-  module P = Utils.Persistent(struct
-      type t = File.t list
-      let name = "TO-PROMOTE"
-      let version = 1
-    end)
-
-  let db_file = Path.relative Path.build_dir ".to-promote"
-
-  let dump_db db =
-    if Path.build_dir_exists () then begin
-      match db with
-      | [] -> if Path.exists db_file then Path.unlink_no_err db_file
-      | l -> P.dump db_file l
-    end
-
-  let load_db () = Option.value ~default:[] (P.load db_file)
-
-  let group_by_targets db =
-    List.map db ~f:(fun { File. src; dst } ->
-      (dst, src))
-    |> Path.Map.of_list_multi
-    (* Sort the list of possible sources for deterministic behavior *)
-    |> Path.Map.map ~f:(List.sort ~compare:Path.compare)
-
-  let do_promote db =
-    let by_targets = group_by_targets db  in
-    let potential_build_contexts =
-      match Path.readdir_unsorted Path.build_dir with
-      | exception _ -> []
-      | files ->
-        List.filter_map files ~f:(fun fn ->
-          if fn = "" || fn.[0] = '.' || fn = "install" then
-            None
-          else
-            let path = Path.(relative build_dir) fn in
-            Option.some_if (Path.is_directory path) path)
-    in
-    let dirs_to_clear_from_cache = Path.root :: potential_build_contexts in
-    Path.Map.iteri by_targets ~f:(fun dst srcs ->
-      match srcs with
-      | [] -> assert false
-      | src :: others ->
-        (* We remove the files from the digest cache to force a rehash
-           on the next run. We do this because on OSX [mtime] is not
-           precise enough and if a file is modified and promoted
-           quickly, it will look like it hasn't changed even though it
-           might have. *)
-        List.iter dirs_to_clear_from_cache ~f:(fun dir ->
-          Utils.Cached_digest.remove (Path.append dir dst));
-        File.promote { src; dst };
-        List.iter others ~f:(fun path ->
-          Format.eprintf " -> ignored %s.@."
-            (Path.to_string_maybe_quoted path)))
-
-  let finalize () =
-    let db =
-      if !Clflags.auto_promote then
-        (do_promote !File.db; [])
-      else
-        !File.db
-    in
-    dump_db db
-
-  let promote_files_registered_in_last_run () =
-    let db = load_db () in
-    do_promote db;
-    dump_db []
-end
-
-type exec_context =
-  { context : Context.t option
-  ; purpose : Process.purpose
-  }
-
-let exec_run_direct ~ectx ~dir ~env ~stdout_to ~stderr_to prog args =
-  begin match ectx.context with
-   | None
-   | Some { Context.for_host = None; _ } -> ()
-   | Some ({ Context.for_host = Some host; _ } as target) ->
-     let invalid_prefix prefix =
-       match Path.descendant prog ~of_:prefix with
-       | None -> ()
-       | Some _ ->
-         die "Context %s has a host %s.@.It's not possible to execute binary %a \
-              in it.@.@.This is a bug and should be reported upstream."
-           target.name host.name Path.pp prog in
-     invalid_prefix (Path.relative Path.build_dir target.name);
-     invalid_prefix (Path.relative Path.build_dir ("install/" ^ target.name));
-  end;
-  Process.run Strict ~dir ~env
-    ~stdout_to ~stderr_to
-    ~purpose:ectx.purpose
-    prog args
-
-let exec_run ~stdout_to ~stderr_to =
-  let stdout_to = get_std_output stdout_to in
-  let stderr_to = get_std_output stderr_to in
-  exec_run_direct ~stdout_to ~stderr_to
-
-let exec_echo stdout_to str =
-  Fiber.return
-    (match stdout_to with
-     | None -> print_string str; flush stdout
-     | Some (_, oc) -> output_string oc str)
-
-let rec exec t ~ectx ~dir ~env ~stdout_to ~stderr_to =
-  match t with
-  | Run (Error e, _) ->
-    Prog.Not_found.raise e
-  | Run (Ok prog, args) ->
-    exec_run ~ectx ~dir ~env ~stdout_to ~stderr_to prog args
-  | Chdir (dir, t) ->
-    exec t ~ectx ~dir ~env ~stdout_to ~stderr_to
-  | Setenv (var, value, t) ->
-    exec t ~ectx ~dir ~stdout_to ~stderr_to
-      ~env:(Env.add env ~var ~value)
-  | Redirect (Stdout, fn, Echo s) ->
-    Io.write_file fn (String.concat s ~sep:" ");
-    Fiber.return ()
-  | Redirect (outputs, fn, Run (Ok prog, args)) ->
-    let out = Process.File fn in
-    let stdout_to, stderr_to =
-      match outputs with
-      | Stdout -> (out, get_std_output stderr_to)
-      | Stderr -> (get_std_output stdout_to, out)
-      | Outputs -> (out, out)
-    in
-    exec_run_direct ~ectx ~dir ~env ~stdout_to ~stderr_to prog args
-  | Redirect (outputs, fn, t) ->
-    redirect ~ectx ~dir outputs fn t ~env ~stdout_to ~stderr_to
-  | Ignore (outputs, t) ->
-    redirect ~ectx ~dir outputs Config.dev_null t ~env ~stdout_to ~stderr_to
-  | Progn l ->
-    exec_list l ~ectx ~dir ~env ~stdout_to ~stderr_to
-  | Echo strs -> exec_echo stdout_to (String.concat strs ~sep:" ")
-  | Cat fn ->
-    Io.with_file_in fn ~f:(fun ic ->
-      let oc =
-        match stdout_to with
-        | None -> stdout
-        | Some (_, oc) -> oc
-      in
-      Io.copy_channels ic oc);
-    Fiber.return ()
-  | Copy (src, dst) ->
-    Io.copy_file ~src ~dst ();
-    Fiber.return ()
-  | Symlink (src, dst) ->
-    if Sys.win32 then
-      Io.copy_file ~src ~dst ()
-    else begin
-      let src =
-        match Path.parent dst with
-        | None -> Path.to_string src
-        | Some from -> Path.reach ~from src
-      in
-      let dst = Path.to_string dst in
-      match Unix.readlink dst with
-      | target ->
-        if target <> src then begin
-          (* @@DRA Win32 remove read-only attribute needed when symlinking enabled *)
-          Unix.unlink dst;
-          Unix.symlink src dst
-        end
-      | exception _ ->
-        Unix.symlink src dst
-    end;
-    Fiber.return ()
-  | Copy_and_add_line_directive (src, dst) ->
-    Io.with_file_in src ~f:(fun ic ->
-      Io.with_file_out dst ~f:(fun oc ->
-        let fn = Path.drop_optional_build_context src in
-        let directive =
-          if List.mem (Path.extension fn) ~set:[".c"; ".cpp"; ".h"] then
-            "line"
-          else
-            ""
-        in
-        Printf.fprintf oc "#%s 1 %S\n" directive (Path.to_string fn);
-        Io.copy_channels ic oc));
-    Fiber.return ()
-  | System cmd ->
-    let path, arg =
-      Utils.system_shell_exn ~needed_to:"interpret (system ...) actions"
-    in
-    exec_run ~ectx ~dir ~env ~stdout_to ~stderr_to path [arg; cmd]
-  | Bash cmd ->
-    exec_run ~ectx ~dir ~env ~stdout_to ~stderr_to
-      (Utils.bash_exn ~needed_to:"interpret (bash ...) actions")
-      ["-e"; "-u"; "-o"; "pipefail"; "-c"; cmd]
-  | Write_file (fn, s) ->
-    Io.write_file fn s;
-    Fiber.return ()
-  | Rename (src, dst) ->
-    Unix.rename (Path.to_string src) (Path.to_string dst);
-    Fiber.return ()
-  | Remove_tree path ->
-    Path.rm_rf path;
-    Fiber.return ()
-  | Mkdir path ->
-    Path.mkdir_p path;
-    Fiber.return ()
-  | Digest_files paths ->
-    let s =
-      let data =
-        List.map paths ~f:(fun fn ->
-          (Path.to_string fn, Utils.Cached_digest.file fn))
-      in
-      Digest.string
-        (Marshal.to_string data [])
-    in
-    exec_echo stdout_to s
-  | Diff { optional; file1; file2; mode } ->
-    let compare_files =
-      match mode with
-      | Text_jbuild | Binary -> Io.compare_files
-      | Text -> Io.compare_text_files
-    in
-    if (optional && not (Path.exists file1 && Path.exists file2)) ||
-       compare_files file1 file2 = Eq then
-      Fiber.return ()
-    else begin
-      let is_copied_from_source_tree file =
-        match Path.drop_build_context file with
-        | None -> false
-        | Some file -> Path.exists file
-      in
-      if is_copied_from_source_tree file1 &&
-         not (is_copied_from_source_tree file2) then begin
-        Promotion.File.register
-          { src = file2
-          ; dst = Option.value_exn (Path.drop_build_context file1)
-          }
-      end;
-      if mode = Binary then
-        die "@{<error>Error@}: Files %s and %s differ."
-          (Path.to_string_maybe_quoted file1)
-          (Path.to_string_maybe_quoted file2)
-      else
-        Print_diff.print file1 file2
-          ~skip_trailing_cr:(mode = Text && Sys.win32)
-    end
-  | Merge_files_into (sources, extras, target) ->
-    let lines =
-      List.fold_left
-        ~init:(String.Set.of_list extras)
-        ~f:(fun set source_path ->
-          Io.lines_of_file source_path
-          |> String.Set.of_list
-          |> String.Set.union set
-        )
-        sources
-    in
-    Io.write_lines target (String.Set.to_list lines);
-    Fiber.return ()
-
-and redirect outputs fn t ~ectx ~dir ~env ~stdout_to ~stderr_to =
-  let oc = Io.open_out fn in
-  let out = Some (fn, oc) in
-  let stdout_to, stderr_to =
-    match outputs with
-    | Stdout -> (out, stderr_to)
-    | Stderr -> (stdout_to, out)
-    | Outputs -> (out, out)
-  in
-  exec t ~ectx ~dir ~env ~stdout_to ~stderr_to >>| fun () ->
-  close_out oc
-
-and exec_list l ~ectx ~dir ~env ~stdout_to ~stderr_to =
-  match l with
-  | [] ->
-    Fiber.return ()
-  | [t] ->
-    exec t ~ectx ~dir ~env ~stdout_to ~stderr_to
-  | t :: rest ->
-    exec t ~ectx ~dir ~env ~stdout_to ~stderr_to >>= fun () ->
-    exec_list rest ~ectx ~dir ~env ~stdout_to ~stderr_to
-
-let exec ~targets ~context t =
-  let env =
-    match (context : Context.t option) with
-    | None   -> Env.initial
-    | Some c -> c.env
-  in
-  let purpose = Process.Build_job targets in
-  let ectx = { purpose; context } in
-  exec t ~ectx ~dir:Path.root ~env ~stdout_to:None ~stderr_to:None
-
-let sandbox t ~sandboxed ~deps ~targets =
-  Progn
-    [ Progn (List.filter_map deps ~f:(fun path ->
-        if Path.is_managed path then
-          Some (Ast.Symlink (path, sandboxed path))
-        else
-          None))
-    ; map t
-        ~dir:Path.root
-        ~f_string:(fun ~dir:_ x -> x)
-        ~f_path:(fun ~dir:_ p -> sandboxed p)
-        ~f_program:(fun ~dir:_ x -> Result.map x ~f:sandboxed)
-    ; Progn (List.filter_map targets ~f:(fun path ->
-        if Path.is_managed path then
-          Some (Ast.Rename (sandboxed path, path))
-        else
-          None))
-    ]
-
 module Infer = struct
   module Outcome = struct
     type t =
@@ -1107,3 +778,22 @@ module Infer = struct
   let unexpanded_targets t =
     (Unexp.infer t).targets
 end
+
+let sandbox t ~sandboxed ~deps ~targets : t =
+  Progn
+    [ Progn (List.filter_map deps ~f:(fun path ->
+        if Path.is_managed path then
+          Some (Symlink (path, sandboxed path))
+        else
+          None))
+    ; map t
+        ~dir:Path.root
+        ~f_string:(fun ~dir:_ x -> x)
+        ~f_path:(fun ~dir:_ p -> sandboxed p)
+        ~f_program:(fun ~dir:_ x -> Result.map x ~f:sandboxed)
+    ; Progn (List.filter_map targets ~f:(fun path ->
+        if Path.is_managed path then
+          Some (Rename (sandboxed path, path))
+        else
+          None))
+    ]

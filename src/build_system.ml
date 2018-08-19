@@ -112,7 +112,7 @@ module Internal_rule = struct
     ; targets          : Path.Set.t
     ; context          : Context.t option
     ; build            : (unit, Action.t) Build.t
-    ; mode             : Jbuild.Rule.Mode.t
+    ; mode             : Dune_file.Rule.Mode.t
     ; loc              : Loc.t option
     ; dir              : Path.t
     ; mutable exec     : Exec_status.t
@@ -354,6 +354,7 @@ module Dir_status = struct
     ; action : (unit, Action.t) Build.t
     ; locks  : Path.t list
     ; context : Context.t
+    ; loc : Loc.t option
     }
 
 
@@ -430,7 +431,7 @@ let get_dir_status t ~dir =
   Path.Table.find_or_add t.dirs dir ~f:(fun _ ->
     if Path.is_in_source_tree dir then
       Dir_status.Loaded (File_tree.files_of t.file_tree dir)
-    else if dir = Path.build_dir then
+    else if Path.equal dir Path.build_dir then
       (* Not allowed to look here *)
       Dir_status.Loaded Path.Set.empty
     else if not (Path.is_managed dir) then
@@ -684,15 +685,15 @@ let remove_old_artifacts t ~dir ~subdirs_to_keep =
           if not (Path.Table.mem t.files path) then Path.unlink path)
 
 let no_rule_found =
-  let fail fn =
-    die "No rule found for %s" (Utils.describe_target fn)
+  let fail fn ~loc =
+    Loc.fail_opt loc "No rule found for %s" (Utils.describe_target fn)
   in
-  fun t fn ->
+  fun t ~loc fn ->
     match Utils.analyse_target fn with
-    | Other _ -> fail fn
+    | Other _ -> fail fn ~loc
     | Regular (ctx, _) ->
       if String.Map.mem t.contexts ctx then
-        fail fn
+        fail fn ~loc
       else
         die "Trying to build %s but build context %s doesn't exist.%s"
           (Path.to_string_maybe_quoted fn)
@@ -700,7 +701,7 @@ let no_rule_found =
           (hint ctx (String.Map.keys t.contexts))
     | Alias (ctx, fn') ->
       if String.Map.mem t.contexts ctx then
-        fail fn
+        fail fn ~loc
       else
         let fn = Path.append (Path.relative Path.build_dir ctx) fn' in
         die "Trying to build alias %s but build context %s doesn't exist.%s"
@@ -729,7 +730,7 @@ let rec compile_rule t ?(copy_source=false) pre_rule =
 
   let eval_rule () =
     t.hook Rule_started;
-    wait_for_deps t (Lazy.force static_deps).rule_deps
+    wait_for_deps t (Lazy.force static_deps).rule_deps ~loc
     >>| fun () ->
     Build_exec.exec t build ()
   in
@@ -737,10 +738,10 @@ let rec compile_rule t ?(copy_source=false) pre_rule =
     let static_deps = (Lazy.force static_deps).action_deps in
     Fiber.fork_and_join_unit
       (fun () ->
-         wait_for_deps t static_deps)
+         wait_for_deps ~loc t static_deps)
       (fun () ->
          Fiber.Future.wait rule_evaluation >>= fun (action, dyn_deps) ->
-         wait_for_deps t (Path.Set.diff dyn_deps static_deps)
+         wait_for_deps ~loc t (Path.Set.diff dyn_deps static_deps)
          >>| fun () ->
          (action, dyn_deps))
     >>= fun (action, dyn_deps) ->
@@ -805,7 +806,7 @@ let rec compile_rule t ?(copy_source=false) pre_rule =
         in
         make_local_dirs t (Action.chdirs action);
         with_locks locks ~f:(fun () ->
-          Action.exec ~context ~targets action) >>| fun () ->
+          Action_exec.exec ~context ~targets action) >>| fun () ->
         Option.iter sandbox_dir ~f:Path.rm_rf;
         (* All went well, these targets are no longer pending *)
         pending_targets := Path.Set.diff !pending_targets targets;
@@ -900,7 +901,7 @@ and load_dir_and_get_targets t ~dir =
           | [] -> assert false
           | x :: l ->
             t.load_dir_stack <- l;
-            assert (x = dir)));
+            assert (Path.equal x dir)));
       Path.Table.replace t.dirs ~key:dir ~data:Failed_to_load;
       reraise exn
 
@@ -949,13 +950,13 @@ and load_dir_step2_exn t ~dir ~collector ~lazy_generators =
         let rules, deps =
           List.fold_left actions ~init:(rules, deps)
             ~f:(fun (rules, deps)
-                 { Dir_status. stamp; action; locks ; context } ->
+                 { Dir_status. stamp; action; locks ; context ; loc } ->
                  let path =
                    Path.extend_basename base_path
                      ~suffix:("-" ^ Digest.to_hex stamp)
                  in
                  let rule =
-                   Pre_rule.make ~locks ~context:(Some context)
+                   Pre_rule.make ~locks ~context:(Some context) ?loc
                      (Build.progn [ action; Build.create_file path ])
                  in
                  (rule :: rules, Path.Set.add deps path))
@@ -1094,7 +1095,7 @@ The following targets are not:
    | [] -> assert false
    | x :: l ->
      t.load_dir_stack <- l;
-     assert (x = dir));
+     assert (Path.equal x dir));
 
   (* Compile the rules and cleanup stale artifacts *)
   List.iter rules ~f:(compile_rule t ~copy_source:false);
@@ -1107,7 +1108,7 @@ The following targets are not:
 
   targets
 
-and wait_for_file t fn =
+and wait_for_file t ~loc fn =
   match Path.Table.find t.files fn with
   | Some file -> wait_for_file_found fn file
   | None ->
@@ -1116,7 +1117,7 @@ and wait_for_file t fn =
       load_dir t ~dir;
       match Path.Table.find t.files fn with
       | Some file -> wait_for_file_found fn file
-      | None -> no_rule_found t fn
+      | None -> no_rule_found t ~loc fn
     end else if Path.exists fn then
       Fiber.return ()
     else
@@ -1146,8 +1147,8 @@ and wait_for_file_found fn (File_spec.T file) =
                 };
       Fiber.Future.wait rule_execution)
 
-and wait_for_deps t deps =
-  Fiber.parallel_iter (Path.Set.to_list deps) ~f:(wait_for_file t)
+and wait_for_deps ~loc t deps =
+  Fiber.parallel_iter (Path.Set.to_list deps) ~f:(wait_for_file ~loc t)
 
 let stamp_file_for_files_of t ~dir ~ext =
   let files_of_dir =
@@ -1214,7 +1215,7 @@ let all_targets t =
 let finalize t =
   (* Promotion must be handled before dumping the digest cache, as it
      might delete some entries. *)
-  Action.Promotion.finalize ();
+  Promotion.finalize ();
   Promoted_to_delete.dump ();
   Utils.Cached_digest.dump ();
   Trace.dump t.trace
@@ -1260,7 +1261,7 @@ let eval_request t ~request ~process_target =
   Fiber.fork_and_join_unit
     (fun () -> process_targets static_deps)
     (fun () ->
-       wait_for_deps t rule_deps
+       wait_for_deps t ~loc:None rule_deps
        >>= fun () ->
        let result, dyn_deps = Build_exec.exec t request () in
        process_targets (Path.Set.diff dyn_deps static_deps)
@@ -1285,7 +1286,7 @@ let update_universe t =
 let do_build t ~request =
   entry_point t ~f:(fun () ->
     update_universe t;
-    eval_request t ~request ~process_target:(wait_for_file t))
+    eval_request t ~request ~process_target:(wait_for_file ~loc:None t))
 
 module Ir_set = Set.Make(Internal_rule)
 
@@ -1336,7 +1337,7 @@ let all_lib_deps t ~request =
         let deps =
           match Path.Map.find acc rule.dir with
           | None -> deps
-          | Some deps' -> Build.merge_lib_deps deps deps'
+          | Some deps' -> Lib_deps_info.merge deps deps'
         in
         Path.Map.add acc rule.dir deps)
 
@@ -1355,7 +1356,7 @@ let all_lib_deps_by_context t ~request =
   |> String.Map.filteri ~f:(fun ctx _ -> String.Map.mem t.contexts ctx)
   |> String.Map.map ~f:(function
     | [] -> String.Map.empty
-    | x :: l -> List.fold_left l ~init:x ~f:Build.merge_lib_deps)
+    | x :: l -> List.fold_left l ~init:x ~f:Lib_deps_info.merge)
 
 module Rule = struct
   module Id = Internal_rule.Id
@@ -1474,6 +1475,7 @@ let package_deps t pkg files =
       else
         List.fold_left pkgs ~init:acc ~f:add_package
   and add_package acc p =
+    let open Package.Name.Infix in
     if p = pkg then
       acc
     else
@@ -1527,13 +1529,14 @@ let get_collector t ~dir =
     Exn.code_error
       (if Path.is_in_source_tree dir then
          "Build_system.get_collector called on source directory"
-       else if dir = Path.build_dir then
+       else if Path.equal dir Path.build_dir then
          "Build_system.get_collector called on build_dir"
        else if not (Path.is_managed dir) then
          "Build_system.get_collector called on external directory"
        else
          "Build_system.get_collector called on closed directory")
       [ "dir", Path.sexp_of_t dir
+      ; "load_dir_stack", Sexp.To_sexp.list Path.sexp_of_t t.load_dir_stack
       ]
 
 let add_rule t (rule : Build_interpret.Rule.t) =
@@ -1578,15 +1581,13 @@ let on_load_dir t ~dir ~f =
     p.lazy_generators <- f :: lazy_generators
 
 let eval_glob t ~dir re =
-  let targets = targets_of t ~dir |> Path.Set.to_list |> List.map ~f:Path.basename in
-  let files =
-    match File_tree.find_dir t.file_tree dir with
-    | None -> targets
-    | Some d ->
-      String.Set.union (String.Set.of_list targets) (File_tree.Dir.files d)
-      |> String.Set.to_list
-  in
-  List.filter files ~f:(Re.execp re)
+  Path.Set.fold (targets_of t ~dir) ~init:[] ~f:(fun path acc ->
+    let fn = Path.basename path in
+    if Re.execp re fn then
+      fn :: acc
+    else
+      acc)
+  |> List.rev
 
 module Alias = struct
   include Alias0
@@ -1617,12 +1618,13 @@ module Alias = struct
         Build.fanout def.dyn_deps build >>^ fun (a, b) ->
         Path.Set.union a b
 
-  let add_action build_system t ~context ?(locks=[]) ~stamp action =
+  let add_action build_system t ~context ~loc ?(locks=[]) ~stamp action =
     let def = get_alias_def build_system t in
     def.actions <- { stamp = Digest.string (Sexp.to_string ~syntax:Dune stamp)
                    ; action
                    ; locks
                    ; context
+                   ; loc
                    } :: def.actions
 end
 

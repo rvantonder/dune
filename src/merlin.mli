@@ -7,7 +7,7 @@ type t
 val make
   :  ?requires:Lib.t list Or_exn.t
   -> ?flags:(unit, string list) Build.t
-  -> ?preprocess:Jbuild.Preprocess.t
+  -> ?preprocess:Dune_file.Preprocess.t
   -> ?libname:string
   -> ?source_dirs: Path.Set.t
   -> ?objs_dirs:Path.Set.t
@@ -22,6 +22,7 @@ val merge_all : t list -> t option
 val add_rules
   : Super_context.t
   -> dir:Path.t
+  -> more_src_dirs:Path.t list
   -> scope:Scope.t
   -> dir_kind:File_tree.Dune_file.Kind.t
   -> t

@@ -47,6 +47,8 @@ module External : sig
   val initial_cwd : t
   val cwd : unit -> t
   val extend_basename : t -> suffix:string -> t
+  val extension : t -> string
+  val split_extension : t -> t * string
 end = struct
   include Interned.No_interning(struct
       let initial_size = 512
@@ -116,6 +118,11 @@ end = struct
   let basename t = Filename.basename (to_string t)
   let parent t = as_string ~f:Filename.dirname t
 
+  let extension t = Filename.extension (to_string t)
+  let split_extension t =
+    let s, ext = Filename.split_extension (to_string t) in
+    (make s, ext)
+
   let cwd () = make (Sys.getcwd ())
   let initial_cwd = cwd ()
 end
@@ -129,6 +136,7 @@ module Local : sig
   val is_root : t -> bool
   val compare : t -> t -> Ordering.t
   val compare_val : t -> t -> Ordering.t
+  val equal : t -> t -> bool
   val of_string : ?error_loc:Usexp.Loc.t -> string -> t
   val to_string : t -> string
   val relative : ?error_loc:Usexp.Loc.t -> t -> string -> t
@@ -140,6 +148,8 @@ module Local : sig
   val reach : t -> from:t -> string
   val basename : t -> string
   val extend_basename : t -> suffix:string -> t
+  val extension : t -> string
+  val split_extension : t -> t * string
   module Set : Set.S with type elt = t
 
   module Prefix : sig
@@ -162,6 +172,11 @@ end = struct
     end)()
 
   let compare_val x y = String.compare (to_string x) (to_string y)
+
+  let equal x y =
+    match compare x y with
+    | Eq -> true
+    | Gt | Lt -> false
 
   let root = make "."
 
@@ -343,6 +358,11 @@ end = struct
     loop (to_list t) (to_list from)
 
   let extend_basename t ~suffix = make (to_string t ^ suffix)
+
+  let extension t = Filename.extension (to_string t)
+  let split_extension t =
+    let s, ext = Filename.split_extension (to_string t) in
+    (make s, ext)
 
   module Prefix = struct
     let make_path = make
@@ -588,17 +608,17 @@ let of_string ?error_loc s =
       make_local_path (Local.of_string s ?error_loc)
 
 let t =
-  Sexp.Of_sexp.(
-    peek_exn >>= function
-    | Template _ | Atom _ | Quoted_string _ ->
+  let open Sexp.Of_sexp in
+  if_list
+    ~then_:
+      (sum
+         [ "In_build_dir"  , Local.t    >>| in_build_dir
+         ; "In_source_tree", Local.t    >>| in_source_tree
+         ; "External"      , External.t >>| external_
+         ])
+    ~else_:
       (* necessary for old build dirs *)
-      plain_string (fun ~loc:_ s -> of_string s)
-    | List _ ->
-      sum
-        [ "In_build_dir"  , Local.t    >>| in_build_dir
-        ; "In_source_tree", Local.t    >>| in_source_tree
-        ; "External"      , External.t >>| external_
-        ])
+      (plain_string (fun ~loc:_ s -> of_string s))
 
 let sexp_of_t t =
   let constr f x y = Sexp.To_sexp.(pair string f) (x, y) in
@@ -901,9 +921,24 @@ let compare x y =
   | _               , In_source_tree _ -> Gt
   | In_build_dir x  , In_build_dir y   -> Local.compare_val x y
 
-let extension t = Filename.extension (to_string t)
+let extension t =
+  match t with
+  | External t -> External.extension t
+  | In_build_dir t | In_source_tree t -> Local.extension t
 
-let pp ppf t = Format.pp_print_string ppf (to_string t)
+let split_extension t =
+  match t with
+  | External t ->
+    let t, ext = External.split_extension t in
+    (external_ t, ext)
+  | In_build_dir t ->
+    let t, ext = Local.split_extension t in
+    (in_build_dir t, ext)
+  | In_source_tree t ->
+    let t, ext = Local.split_extension t in
+    (in_source_tree t, ext)
+
+let pp ppf t = Format.pp_print_string ppf (to_string_maybe_quoted t)
 
 let pp_debug ppf = function
   | In_source_tree s ->

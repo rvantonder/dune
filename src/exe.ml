@@ -51,7 +51,7 @@ module Linkage = struct
   let so_flags_windows = o_flags
   let so_flags_unix    = ["-output-complete-obj"; "-runtime-variant"; "_pic"]
 
-  let of_user_config (ctx : Context.t) (m : Jbuild.Executables.Link_mode.t) =
+  let of_user_config (ctx : Context.t) (m : Dune_file.Executables.Link_mode.t) =
     let wanted_mode : Mode.t =
       match m.mode with
       | Byte   -> Byte
@@ -76,25 +76,27 @@ module Linkage = struct
     let flags =
       match m.kind with
       | Exe ->
-        if wanted_mode = Native && real_mode = Byte then
-          ["-custom"]
-        else
-          []
+        begin
+          match wanted_mode, real_mode with
+          | Native, Byte -> ["-custom"]
+          | _ -> []
+        end
       | Object -> o_flags
       | Shared_object ->
         let so_flags =
-          if ctx.os_type = "Win32" then
+          if String.equal ctx.os_type "Win32" then
             so_flags_windows
           else
             so_flags_unix
         in
-        if real_mode = Native then
+        match real_mode with
+        | Native ->
           (* The compiler doesn't pass these flags in native mode. This
              looks like a bug in the compiler. *)
           List.concat_map ctx.native_c_libraries ~f:(fun flag ->
             ["-cclib"; flag])
           @ so_flags
-        else
+        | Byte ->
           so_flags
     in
     { ext
@@ -108,7 +110,7 @@ let link_exe
       ~(linkage:Linkage.t)
       ~top_sorted_modules
       ?(link_flags=Build.arr (fun _ -> []))
-      ?(js_of_ocaml=Jbuild.Js_of_ocaml.default)
+      ?(js_of_ocaml=Dune_file.Js_of_ocaml.default)
       cctx
   =
   let sctx     = CC.super_context cctx in
@@ -143,7 +145,7 @@ let link_exe
        link_flags
      >>>
      Build.of_result_map requires ~f:(fun libs ->
-       Build.paths (Lib.L.archive_files libs ~mode ~ext_lib:ctx.ext_lib))
+       Build.paths (Lib.L.archive_files libs ~mode))
      >>>
      Build.run ~context:ctx
        (Ok compiler)
@@ -157,7 +159,7 @@ let link_exe
        ]);
   if linkage.ext = ".bc" then
     let rules =
-      Js_of_ocaml_rules.build_exe sctx ~dir ~js_of_ocaml ~src:exe ~requires
+      Js_of_ocaml_rules.build_exe cctx ~js_of_ocaml ~src:exe
     in
     let cm_and_flags =
       Build.fanout
@@ -172,7 +174,7 @@ let build_and_link_many
       ~programs
       ~linkages
       ?link_flags
-      ?(js_of_ocaml=Jbuild.Js_of_ocaml.default)
+      ?(js_of_ocaml=Dune_file.Js_of_ocaml.default)
       cctx
   =
   let dep_graphs = Ocamldep.rules cctx in

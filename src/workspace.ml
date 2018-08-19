@@ -5,6 +5,11 @@ open Stanza.Of_sexp
    for simplicity *)
 let syntax = Stanza.syntax
 
+let env_field =
+  field_o "env"
+    (Syntax.since syntax (1, 1) >>= fun () ->
+     Dune_env.Stanza.t)
+
 module Context = struct
   module Target = struct
     type t =
@@ -40,60 +45,66 @@ module Context = struct
         name)
   end
 
-  module Opam = struct
+  module Common = struct
     type t =
       { loc     : Loc.t
-      ; name    : string
       ; profile : string
+      ; targets : Target.t list
+      ; env     : Dune_env.Stanza.t option
+      }
+
+    let t ~profile =
+      let%map env = env_field
+      and targets = field "targets" (list Target.t) ~default:[Target.Native]
+      and profile = field "profile" string ~default:profile
+      and loc = loc
+      in
+      { targets
+      ; profile
+      ; loc
+      ; env
+      }
+  end
+
+  module Opam = struct
+    type t =
+      { base    : Common.t
+      ; name    : string
       ; switch  : string
       ; root    : string option
       ; merlin  : bool
-      ; targets : Target.t list
       }
 
     let t ~profile ~x =
-      field   "switch"  string                                    >>= fun switch ->
-      field   "name"    Name.t ~default:switch                    >>= fun name ->
-      field   "targets" (list Target.t) ~default:[Target.Native]  >>= fun targets ->
-      field_o "root"    string                                    >>= fun root ->
-      field_b "merlin"                                            >>= fun merlin ->
-      field   "profile" string ~default:profile                   >>= fun profile ->
-      loc >>= fun loc ->
-      return { loc
-             ; switch
-             ; name
-             ; root
-             ; merlin
-             ; targets = Target.add targets x
-             ; profile
-             }
+      let%map base = Common.t ~profile
+      and switch = field "switch" string
+      and name = field_o "name" Name.t
+      and root = field_o "root" string
+      and merlin = field_b "merlin"
+      in
+      let name = Option.value ~default:switch name in
+      let base = { base with targets = Target.add base.targets x } in
+      { base
+      ; switch
+      ; name
+      ; root
+      ; merlin
+      }
   end
 
   module Default = struct
-    type t =
-      { loc     : Loc.t
-      ; profile : string
-      ; targets : Target.t list
-      }
+    type t = Common.t
 
     let t ~profile ~x =
-      field "targets" (list Target.t) ~default:[Target.Native]
-      >>= fun targets ->
-      field "profile" string ~default:profile
-      >>= fun profile ->
-      loc
-      >>= fun loc ->
-      return { loc
-             ; targets = Target.add targets x
-             ; profile
-             }
+      Common.t ~profile >>| fun t ->
+      { t with targets = Target.add t.targets x }
   end
 
   type t = Default of Default.t | Opam of Opam.t
 
   let loc = function
     | Default x -> x.loc
-    | Opam    x -> x.loc
+    | Opam    x -> x.base.loc
 
   let t ~profile ~x =
     sum
@@ -106,14 +117,14 @@ module Context = struct
       ]
 
   let t ~profile ~x =
-    Syntax.get_exn syntax >>= function
-    | (0, _) ->
-      (* jbuild-workspace files *)
-      (peek_exn >>= function
-       | List (_, List _ :: _) ->
-         Sexp.Of_sexp.record (Opam.t ~profile ~x) >>| fun x -> Opam x
-       | _ -> t ~profile ~x)
-    | _ -> t ~profile ~x
+    switch_file_kind
+      ~jbuild:
+        (* jbuild-workspace files *)
+        (peek_exn >>= function
+         | List (_, List _ :: _) ->
+           Sexp.Of_sexp.record (Opam.t ~profile ~x) >>| fun x -> Opam x
+         | _ -> t ~profile ~x)
+      ~dune:(t ~profile ~x)
 
   let name = function
     | Default _ -> "default"
@@ -121,7 +132,7 @@ module Context = struct
 
   let targets = function
     | Default x -> x.targets
-    | Opam    x -> x.targets
+    | Opam    x -> x.base.targets
 
   let all_names t =
     let n = name t in
@@ -135,45 +146,43 @@ module Context = struct
       ; targets = [Option.value x ~default:Target.Native]
       ; profile = Option.value profile
                     ~default:Config.default_build_profile
+      ; env = None
       }
 end
 
 type t =
   { merlin_context : string option
   ; contexts       : Context.t list
+  ; env            : Dune_env.Stanza.t option
   }
 
 include Versioned_file.Make(struct type t = unit end)
 let () = Lang.register syntax ()
 
 let t ?x ?profile:cmdline_profile () =
+  env_field >>= fun env ->
   field "profile" string ~default:Config.default_build_profile
   >>= fun profile ->
   let profile = Option.value cmdline_profile ~default:profile in
   multi_field "context" (Context.t ~profile ~x)
-  >>= fun contexts ->
+  >>| fun contexts ->
   let defined_names = ref String.Set.empty in
-  let { merlin_context; contexts } =
-    let init =
-      { merlin_context = None
-      ; contexts       = []
-      }
-    in
-    List.fold_left contexts ~init ~f:(fun t ctx ->
+  let merlin_context =
+    List.fold_left contexts ~init:None ~f:(fun acc ctx ->
       let name = Context.name ctx in
       if String.Set.mem !defined_names name then
         Loc.fail (Context.loc ctx)
           "second definition of build context %S" name;
       defined_names := String.Set.union !defined_names
                          (String.Set.of_list (Context.all_names ctx));
-      match ctx, t.merlin_context with
+      match ctx, acc with
       | Opam { merlin = true; _ }, Some _ ->
         Loc.fail (Context.loc ctx)
           "you can only have one context for merlin"
       | Opam { merlin = true; _ }, None ->
-        { merlin_context = Some name; contexts = ctx :: t.contexts }
+        Some name
       | _ ->
-        { t with contexts = ctx :: t.contexts })
+        acc)
   in
   let contexts =
     match contexts with
@@ -190,16 +199,17 @@ let t ?x ?profile:cmdline_profile () =
       else
         None
   in
-  return
-    { merlin_context
-    ; contexts = List.rev contexts
-    }
+  { merlin_context
+  ; contexts = List.rev contexts
+  ; env
+  }
 
 let t ?x ?profile () = fields (t ?x ?profile ())
 
 let default ?x ?profile () =
   { merlin_context = Some "default"
   ; contexts = [Context.default ?x ?profile ()]
+  ; env = None
   }
 
 let load ?x ?profile p =

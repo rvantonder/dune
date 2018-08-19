@@ -6,10 +6,10 @@ module SC = Super_context
 
 module Preprocess = struct
   type t =
-    | Pps of Jbuild.Preprocess.pps
+    | Pps of Dune_file.Preprocess.pps
     | Other
 
-  let make : Jbuild.Preprocess.t -> t = function
+  let make : Dune_file.Preprocess.t -> t = function
     | Pps pps -> Pps pps
     | _       -> Other
 
@@ -18,14 +18,17 @@ module Preprocess = struct
     | Other, Other -> Other
     | Pps _, Other -> a
     | Other, Pps _ -> b
-    | Pps { loc = _; pps = pps1; flags = flags1 },
-      Pps { loc = _; pps = pps2; flags = flags2 } ->
+    | Pps { loc = _; pps = pps1; flags = flags1; staged = s1 },
+      Pps { loc = _; pps = pps2; flags = flags2; staged = s2 } ->
       match
-        match List.compare flags1 flags2 ~compare:String.compare with
+        match Bool.compare s1 s2 with
+        | Gt| Lt as ne -> ne
         | Eq ->
-          List.compare pps1 pps2 ~compare:(fun (_, a) (_, b) ->
-            Jbuild.Pp.compare a b)
-        | ne -> ne
+          match List.compare flags1 flags2 ~compare:String.compare with
+          | Gt | Lt as ne -> ne
+          | Eq ->
+            List.compare pps1 pps2 ~compare:(fun (_, a) (_, b) ->
+              Dune_file.Pp.compare a b)
       with
       | Eq -> a
       | _  -> Other
@@ -74,7 +77,7 @@ type t =
 let make
       ?(requires=Ok [])
       ?(flags=Build.return [])
-      ?(preprocess=Jbuild.Preprocess.No_preprocessing)
+      ?(preprocess=Dune_file.Preprocess.No_preprocessing)
       ?libname
       ?(source_dirs=Path.Set.empty)
       ?(objs_dirs=Path.Set.empty)
@@ -98,7 +101,7 @@ let add_source_dir t dir =
 
 let ppx_flags sctx ~dir:_ ~scope ~dir_kind { preprocess; libname; _ } =
   match preprocess with
-  | Pps { loc = _; pps; flags } -> begin
+  | Pps { loc = _; pps; flags; staged = _ } -> begin
     match Preprocessing.get_ppx_driver sctx ~scope ~dir_kind pps with
     | Ok exe ->
       (Path.to_absolute_filename exe
@@ -109,7 +112,8 @@ let ppx_flags sctx ~dir:_ ~scope ~dir_kind { preprocess; libname; _ } =
   end
   | Other -> []
 
-let dot_merlin sctx ~dir ~scope ~dir_kind ({ requires; flags; _ } as t) =
+let dot_merlin sctx ~dir ~more_src_dirs ~scope ~dir_kind
+      ({ requires; flags; _ } as t) =
   match Path.drop_build_context dir with
   | None -> ()
   | Some remaindir ->
@@ -120,7 +124,7 @@ let dot_merlin sctx ~dir ~scope ~dir_kind ({ requires; flags; _ } as t) =
        want to declare a dependency on the contents of the .merlin
        file.
 
-       Currently jbuilder doesn't support declaring a dependency only
+       Currently dune doesn't support declaring a dependency only
        on the existence of a file, so we have to use this trick. *)
     SC.add_rule sctx
       (Build.path merlin_file
@@ -136,6 +140,9 @@ let dot_merlin sctx ~dir ~scope ~dir_kind ({ requires; flags; _ } as t) =
                   Lib.src_dir lib
                   |> Path.drop_optional_build_context)
               , Path.Set.add obj_dirs (Lib.obj_dir lib)))
+        in
+        let src_dirs =
+          Path.Set.union src_dirs (Path.Set.of_list more_src_dirs)
         in
         Dot_file.to_string
           ~remaindir
@@ -162,6 +169,6 @@ let merge_all = function
   | [] -> None
   | init::ts -> Some (List.fold_left ~init ~f:merge_two ts)
 
-let add_rules sctx ~dir ~scope ~dir_kind merlin =
+let add_rules sctx ~dir ~more_src_dirs ~scope ~dir_kind merlin =
   if (SC.context sctx).merlin then
-    dot_merlin sctx ~dir ~scope ~dir_kind merlin
+    dot_merlin sctx ~dir ~more_src_dirs ~scope ~dir_kind merlin

@@ -52,9 +52,8 @@
  (action
   (chdir
    test-cases/configurator
-   (progn
-    (run %{exe:cram.exe} -skip-platforms win -test run.t)
-    (diff? run.t run.t.corrected)))))
+   (progn (run %{exe:cram.exe} -test run.t) (diff? run.t run.t.corrected))))
+ (enabled_if (<> %{ocaml-config:system} win)))
 
 (alias
  (name copy_files)
@@ -97,6 +96,22 @@
    (progn (run %{exe:cram.exe} -test run.t) (diff? run.t run.t.corrected)))))
 
 (alias
+ (name dev-flag-1103)
+ (deps (package dune) (source_tree test-cases/dev-flag-1103))
+ (action
+  (chdir
+   test-cases/dev-flag-1103
+   (progn (run %{exe:cram.exe} -test run.t) (diff? run.t run.t.corrected)))))
+
+(alias
+ (name dune-build-dir-exec-1101)
+ (deps (package dune) (source_tree test-cases/dune-build-dir-exec-1101))
+ (action
+  (chdir
+   test-cases/dune-build-dir-exec-1101
+   (progn (run %{exe:cram.exe} -test run.t) (diff? run.t run.t.corrected)))))
+
+(alias
  (name dune-jbuild-var-case)
  (deps (package dune) (source_tree test-cases/dune-jbuild-var-case))
  (action
@@ -134,6 +149,14 @@
  (action
   (chdir
    test-cases/env
+   (progn (run %{exe:cram.exe} -test run.t) (diff? run.t run.t.corrected)))))
+
+(alias
+ (name envs-and-contexts)
+ (deps (package dune) (source_tree test-cases/envs-and-contexts))
+ (action
+  (chdir
+   test-cases/envs-and-contexts
    (progn (run %{exe:cram.exe} -test run.t) (diff? run.t run.t.corrected)))))
 
 (alias
@@ -198,6 +221,22 @@
  (action
   (chdir
    test-cases/gen-opam-install-file
+   (progn (run %{exe:cram.exe} -test run.t) (diff? run.t run.t.corrected)))))
+
+(alias
+ (name github1019)
+ (deps (package dune) (source_tree test-cases/github1019))
+ (action
+  (chdir
+   test-cases/github1019
+   (progn (run %{exe:cram.exe} -test run.t) (diff? run.t run.t.corrected)))))
+
+(alias
+ (name github1099)
+ (deps (package dune) (source_tree test-cases/github1099))
+ (action
+  (chdir
+   test-cases/github1099
    (progn (run %{exe:cram.exe} -test run.t) (diff? run.t run.t.corrected)))))
 
 (alias
@@ -307,9 +346,8 @@
  (action
   (chdir
    test-cases/github764
-   (progn
-    (run %{exe:cram.exe} -skip-platforms win -test run.t)
-    (diff? run.t run.t.corrected)))))
+   (progn (run %{exe:cram.exe} -test run.t) (diff? run.t run.t.corrected))))
+ (enabled_if (<> %{ocaml-config:system} win)))
 
 (alias
  (name github784)
@@ -443,6 +481,22 @@
    (progn (run %{exe:cram.exe} -test run.t) (diff? run.t run.t.corrected)))))
 
 (alias
+ (name missing-loc-run)
+ (deps (package dune) (source_tree test-cases/missing-loc-run))
+ (action
+  (chdir
+   test-cases/missing-loc-run
+   (progn (run %{exe:cram.exe} -test run.t) (diff? run.t run.t.corrected)))))
+
+(alias
+ (name multi-dir)
+ (deps (package dune) (source_tree test-cases/multi-dir))
+ (action
+  (chdir
+   test-cases/multi-dir
+   (progn (run %{exe:cram.exe} -test run.t) (diff? run.t run.t.corrected)))))
+
+(alias
  (name multiple-private-libs)
  (deps (package dune) (source_tree test-cases/multiple-private-libs))
  (action
@@ -453,11 +507,27 @@
     (diff? run.t run.t.corrected)))))
 
 (alias
+ (name name-field-validation)
+ (deps (package dune) (source_tree test-cases/name-field-validation))
+ (action
+  (chdir
+   test-cases/name-field-validation
+   (progn (run %{exe:cram.exe} -test run.t) (diff? run.t run.t.corrected)))))
+
+(alias
  (name no-installable-mode)
  (deps (package dune) (source_tree test-cases/no-installable-mode))
  (action
   (chdir
    test-cases/no-installable-mode
+   (progn (run %{exe:cram.exe} -test run.t) (diff? run.t run.t.corrected)))))
+
+(alias
+ (name no-name-field)
+ (deps (package dune) (source_tree test-cases/no-name-field))
+ (action
+  (chdir
+   test-cases/no-name-field
    (progn (run %{exe:cram.exe} -test run.t) (diff? run.t run.t.corrected)))))
 
 (alias
@@ -519,15 +589,10 @@
   (chdir
    test-cases/output-obj
    (progn
-    (run
-     %{exe:cram.exe}
-     -skip-versions
-     <4.06.0
-     -skip-platforms
-     macosx,win
-     -test
-     run.t)
-    (diff? run.t run.t.corrected)))))
+    (run %{exe:cram.exe} -skip-versions <4.06.0 -test run.t)
+    (diff? run.t run.t.corrected))))
+ (enabled_if
+  (and (<> %{ocaml-config:system} macosx) (<> %{ocaml-config:system} win))))
 
 (alias
  (name package-dep)
@@ -644,6 +709,14 @@
    (progn (run %{exe:cram.exe} -test run.t) (diff? run.t run.t.corrected)))))
 
 (alias
+ (name several-packages)
+ (deps (package dune) (source_tree test-cases/several-packages))
+ (action
+  (chdir
+   test-cases/several-packages
+   (progn (run %{exe:cram.exe} -test run.t) (diff? run.t run.t.corrected)))))
+
+(alias
  (name shadow-bindings)
  (deps (package dune) (source_tree test-cases/shadow-bindings))
  (action
@@ -730,6 +803,8 @@
   (alias custom-build-dir)
   (alias dep-vars)
   (alias depend-on-the-universe)
+  (alias dev-flag-1103)
+  (alias dune-build-dir-exec-1101)
   (alias dune-jbuild-var-case)
   (alias dune-ppx-driver-system)
   (alias dune-project-edition)
@@ -743,6 +818,8 @@
   (alias findlib-error)
   (alias force-test)
   (alias gen-opam-install-file)
+  (alias github1019)
+  (alias github1099)
   (alias github20)
   (alias github24)
   (alias github25)
@@ -771,8 +848,12 @@
   (alias merlin-tests)
   (alias meta-gen)
   (alias misc)
+  (alias missing-loc-run)
+  (alias multi-dir)
   (alias multiple-private-libs)
+  (alias name-field-validation)
   (alias no-installable-mode)
+  (alias no-name-field)
   (alias null-dep)
   (alias ocaml-config-macro)
   (alias ocaml-syntax)
@@ -794,6 +875,7 @@
   (alias scope-bug)
   (alias scope-ppx-bug)
   (alias select)
+  (alias several-packages)
   (alias shadow-bindings)
   (alias subst)
   (alias syntax-versioning)
@@ -819,6 +901,8 @@
   (alias custom-build-dir)
   (alias dep-vars)
   (alias depend-on-the-universe)
+  (alias dev-flag-1103)
+  (alias dune-build-dir-exec-1101)
   (alias dune-jbuild-var-case)
   (alias dune-ppx-driver-system)
   (alias dune-project-edition)
@@ -831,7 +915,8 @@
   (alias findlib)
   (alias findlib-error)
   (alias force-test)
-  (alias gen-opam-install-file)
+  (alias github1019)
+  (alias github1099)
   (alias github20)
   (alias github24)
   (alias github25)
@@ -857,7 +942,11 @@
   (alias merlin-tests)
   (alias meta-gen)
   (alias misc)
+  (alias missing-loc-run)
+  (alias multi-dir)
+  (alias name-field-validation)
   (alias no-installable-mode)
+  (alias no-name-field)
   (alias null-dep)
   (alias ocaml-config-macro)
   (alias ocaml-syntax)
@@ -872,8 +961,8 @@
   (alias redirections)
   (alias reporting-of-cycles)
   (alias scope-bug)
-  (alias scope-ppx-bug)
   (alias select)
+  (alias several-packages)
   (alias shadow-bindings)
   (alias subst)
   (alias syntax-versioning)
@@ -883,6 +972,6 @@
   (alias windows-diff)
   (alias workspaces)))
 
-(alias (name runtest-disabled) (deps))
+(alias (name runtest-disabled) (deps (alias envs-and-contexts)))
 
 (alias (name runtest-js) (deps (alias js_of_ocaml)))

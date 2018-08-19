@@ -1,5 +1,5 @@
 open Import
-open Jbuild
+open Dune_file
 open Build.O
 open! No_io
 
@@ -51,16 +51,16 @@ let setup sctx ~dir ~(libs : Library.t list) ~scope =
   match libs with
   | [] -> ()
   | _ :: _ ->
+    let utop_exe_dir = utop_exe_dir ~dir in
     let modules =
       Module.Name.Map.singleton
         main_module_name
         (Module.make main_module_name
-           ~impl:{ name = main_module_filename
+           ~impl:{ path   = Path.relative utop_exe_dir main_module_filename
                  ; syntax = Module.Syntax.OCaml
                  }
            ~obj_name:exe_name)
     in
-    let utop_exe_dir = utop_exe_dir ~dir in
     let requires =
       let open Result.O in
       Lib.DB.find_many (Scope.libs scope)
@@ -73,6 +73,7 @@ let setup sctx ~dir ~(libs : Library.t list) ~scope =
         ~scope
         ~dir:utop_exe_dir
         ~modules
+        ~opaque:false
         ~requires
         ~flags:(Ocaml_flags.append_common
                   (Ocaml_flags.default ~profile:(Super_context.profile sctx))

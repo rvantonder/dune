@@ -2,7 +2,7 @@
 Project Layout and Metadata Specification
 *****************************************
 
-A typical dune project will have a ```dune-project`` and one or more
+A typical dune project will have a ``dune-project`` and one or more
 ``<package>.opam`` file at toplevel as well as ``dune`` files wherever
 interesting things are: libraries, executables, tests, documents to install,
 etc...
@@ -82,7 +82,7 @@ sequences:
 - ``\xHH``, a backslash followed by two hexadecimal characters to
   represent the character with ASCII code ``HH`` in hexadecimal
 - ``\\``, a double backslash to represent a single backslash
-- ``\%{`` to represent ``%{`` (see :ref:`variables`)
+- ``\%{`` to represent ``%{`` (see :ref:`variables-project`)
 
 Additionally, a backslash that comes just before the end of the line
 is used to skip the newline up to the next non-space character. For
@@ -140,7 +140,7 @@ descriptions. For instance:
     (body
       This is a simple example of using S-expressions))
 
-.. _variables:
+.. _variables-project:
 
 Variables
 ---------
@@ -175,11 +175,7 @@ like:
 
 .. code:: scheme
 
-          (lang dune 0.1)
-
-The 0.1 version of the language is exactly the same as the Jbuilder language. So
-to convert a Jbuilder project to Dune, simply write this file at the root of
-your project.
+          (lang dune 1.0)
 
 Additionally, they can contains the following stanzas.
 

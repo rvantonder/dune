@@ -1,5 +1,5 @@
 open Import
-open Jbuild
+open Dune_file
 open Build.O
 open! No_io
 
@@ -18,7 +18,7 @@ module Backend = struct
         ; extends          : (Loc.t * string) list
         }
 
-      type Jbuild.Sub_system_info.t += T of t
+      type Dune_file.Sub_system_info.t += T of t
 
       let loc t = t.loc
 
@@ -34,21 +34,18 @@ module Backend = struct
 
       let parse =
         record
-          (loc >>= fun loc ->
-           field "runner_libraries" (list (located string)) ~default:[]
-           >>= fun runner_libraries ->
-           Ordered_set_lang.Unexpanded.field "flags" >>= fun flags ->
-           field_o "generate_runner" (located Action.Unexpanded.t)
-           >>= fun generate_runner ->
-           field "extends" (list (located string)) ~default:[]
-           >>= fun extends ->
-           return
-             { loc
-             ; runner_libraries
-             ; flags
-             ; generate_runner
-             ; extends
-             })
+          (let%map loc = loc
+           and runner_libraries = field "runner_libraries" (list (located string)) ~default:[]
+           and flags = Ordered_set_lang.Unexpanded.field "flags"
+           and generate_runner = field_o "generate_runner" (located Action.Unexpanded.t)
+           and extends = field "extends" (list (located string)) ~default:[]
+           in
+           { loc
+           ; runner_libraries
+           ; flags
+           ; generate_runner
+           ; extends
+           })
     end
 
     type t =
@@ -68,10 +65,10 @@ module Backend = struct
       { info
       ; lib
       ; runner_libraries =
-          Result.all (List.map info.runner_libraries ~f:resolve)
+          Result.List.all (List.map info.runner_libraries ~f:resolve)
       ; extends =
           let open Result.O in
-          Result.all
+          Result.List.all
             (List.map info.extends
                ~f:(fun ((loc, name) as x) ->
                  resolve x >>= fun lib ->
@@ -115,7 +112,7 @@ include Sub_system.Register_end_point(
         ; libraries : (Loc.t * string) list
         }
 
-      type Jbuild.Sub_system_info.t += T of t
+      type Dune_file.Sub_system_info.t += T of t
 
       let empty loc =
         { loc
@@ -133,23 +130,22 @@ include Sub_system.Register_end_point(
       open Stanza.Of_sexp
 
       let parse =
-        eos >>= function
-        | true -> loc >>| empty
-        | false ->
-          record
-            (loc >>= fun loc ->
-             field "deps" (list Dep_conf.t) ~default:[] >>= fun deps ->
-             Ordered_set_lang.Unexpanded.field "flags" >>= fun flags ->
-             field_o "backend" (located string) >>= fun backend ->
-             field "libraries" (list (located string)) ~default:[]
-             >>= fun libraries ->
-             return
-               { loc
-               ; deps
-               ; flags
-               ; backend
-               ; libraries
-               })
+        if_eos
+          ~then_:(loc >>| empty)
+          ~else_:
+            (record
+               (let%map loc = loc
+                and deps = field "deps" (list Dep_conf.t) ~default:[]
+                and flags = Ordered_set_lang.Unexpanded.field "flags"
+                and backend = field_o "backend" (located string)
+                and libraries = field "libraries" (list (located string)) ~default:[]
+                in
+                { loc
+                ; deps
+                ; flags
+                ; backend
+                ; libraries
+                }))
     end
 
     let gen_rules c ~(info:Info.t) ~backends =
@@ -173,7 +169,7 @@ include Sub_system.Register_end_point(
       let modules =
         Module.Name.Map.singleton main_module_name
           (Module.make main_module_name
-             ~impl:{ name   = main_module_filename
+             ~impl:{ path   = Path.relative inline_test_dir main_module_filename
                    ; syntax = OCaml
                    }
              ~obj_name:name)
@@ -186,12 +182,12 @@ include Sub_system.Register_end_point(
 
       let runner_libs =
         let open Result.O in
-        Result.concat_map backends
+        Result.List.concat_map backends
           ~f:(fun (backend : Backend.t) -> backend.runner_libraries)
         >>= fun libs ->
         Lib.DB.find_many (Scope.libs scope) [lib.name]
         >>= fun lib ->
-        Result.all
+        Result.List.all
           (List.map info.libraries
              ~f:(Lib.DB.resolve (Scope.libs scope)))
         >>= fun more_libs ->
@@ -205,7 +201,7 @@ include Sub_system.Register_end_point(
         let files ml_kind =
           Pform.Var.Values (Value.L.paths (
             List.filter_map source_modules ~f:(fun m ->
-              Module.file m ~dir ml_kind)))
+              Module.file m ml_kind)))
         in
         let bindings =
           Pform.Map.of_list_exn
@@ -220,7 +216,11 @@ include Sub_system.Register_end_point(
              Option.map backend.info.generate_runner ~f:(fun (loc, action) ->
                SC.Action.run sctx action ~loc
                  ~bindings
-                 ~dir ~dep_kind:Required ~targets:Alias ~scope)))
+                 ~dir
+                 ~dep_kind:Required
+                 ~targets:Alias
+                 ~targets_dir:dir
+                 ~scope)))
         >>^ (fun actions ->
           Action.with_stdout_to target
             (Action.progn actions))
@@ -233,6 +233,7 @@ include Sub_system.Register_end_point(
           ~scope
           ~dir:inline_test_dir
           ~modules
+          ~opaque:false
           ~requires:runner_libs
           ~flags:(Ocaml_flags.of_list ["-w"; "-24"]);
       in
@@ -257,6 +258,7 @@ include Sub_system.Register_end_point(
       in
 
       SC.add_alias_action sctx
+        ~loc:(Some info.loc)
         (Build_system.Alias.runtest ~dir)
         ~stamp:(List [ Sexp.unsafe_atom_of_string "ppx-runner"
                      ; Quoted_string name
@@ -273,8 +275,8 @@ include Sub_system.Register_end_point(
               (A.run (Ok exe) flags ::
                (Module.Name.Map.values source_modules
                 |> List.concat_map ~f:(fun m ->
-                  [ Module.file m ~dir Impl
-                  ; Module.file m ~dir Intf
+                  [ Module.file m Impl
+                  ; Module.file m Intf
                   ])
                 |> List.filter_map ~f:(fun x -> x)
                 |> List.map ~f:(fun fn ->

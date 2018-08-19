@@ -46,10 +46,31 @@ module Make(Key : Key)(Value : Value with type key = Key.t)
   : S with type value = Value.t
        and type 'a map = 'a Key.Map.t
 
+(** same as [Make] but will retain the source location of the values in the
+    evaluated results *)
+module Make_loc (Key : Key)(Value : Value with type key = Key.t) : sig
+  val eval
+    :  t
+    -> parse:(loc:Loc.t -> string -> Value.t)
+    -> standard:Value.t list
+    -> (Loc.t * Value.t) list
+
+  (** Same as [eval] but the result is unordered *)
+  val eval_unordered
+    :  t
+    -> parse:(loc:Loc.t -> string -> Value.t)
+    -> standard:Value.t Key.Map.t
+    -> (Loc.t * Value.t) Key.Map.t
+end
+
 val standard : t
 val is_standard : t -> bool
 
-val field : ?default:t -> string -> t Sexp.Of_sexp.fields_parser
+val field
+  :  ?default:t
+  -> ?check:unit Sexp.Of_sexp.t
+  -> string
+  -> t Sexp.Of_sexp.fields_parser
 
 module Unexpanded : sig
   type expanded = t
@@ -58,23 +79,28 @@ module Unexpanded : sig
   include Sexp.Sexpable with type t := t
   val standard : t
 
-  val field : ?default:t -> string -> t Sexp.Of_sexp.fields_parser
+  val field
+    :  ?default:t
+    -> ?check:unit Sexp.Of_sexp.t
+    -> string
+    -> t Sexp.Of_sexp.fields_parser
 
   val has_special_forms : t -> bool
 
   (** List of files needed to expand this set *)
   val files
     : t
-    -> f:(String_with_vars.t -> string)
-    -> Sexp.syntax * String.Set.t
+    -> f:(String_with_vars.t -> Path.t)
+    -> Sexp.syntax * Path.Set.t
 
   (** Expand [t] using with the given file contents. [file_contents] is a map from
       filenames to their parsed contents. Every [(:include fn)] in [t] is replaced by
       [Map.find files_contents fn]. Every element is converted to a string using [f]. *)
   val expand
     :  t
-    -> files_contents:Sexp.Ast.t String.Map.t
-    -> f:(String_with_vars.t -> string)
+    -> dir:Path.t
+    -> files_contents:Sexp.Ast.t Path.Map.t
+    -> f:(String_with_vars.t -> Value.t list)
     -> expanded
 
   type position = Pos | Neg

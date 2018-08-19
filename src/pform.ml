@@ -157,6 +157,7 @@ module Map = struct
 
   let rec expand map ~syntax_version ~pform =
     let open Option.O in
+    let open Syntax.Version.Infix in
     let name = String_with_vars.Var.name pform in
     String.Map.find map name >>= fun v ->
     let describe = String_with_vars.Var.describe in
@@ -185,9 +186,9 @@ module Map = struct
         Some v
       else
         Syntax.Error.deleted_in (String_with_vars.Var.loc pform)
-          Stanza.syntax syntax_version ~what:(describe pform) ?repl
+          Stanza.syntax in_version ~what:(describe pform) ?repl
 
-  let expand t ~syntax_version ~pform =
+  let expand t pform syntax_version =
     match String_with_vars.Var.payload pform with
     | None ->
       Option.map (expand t.vars ~syntax_version ~pform) ~f:(fun x ->
@@ -214,7 +215,7 @@ module Map = struct
 
   let of_bindings bindings =
     { vars =
-        Jbuild.Bindings.fold bindings ~init:String.Map.empty ~f:(fun x acc ->
+        Dune_file.Bindings.fold bindings ~init:String.Map.empty ~f:(fun x acc ->
           match x with
           | Unnamed _ -> acc
           | Named (s, _) -> String.Map.add acc s (No_info Var.Named_local))

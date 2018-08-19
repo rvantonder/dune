@@ -32,19 +32,27 @@ module Name : sig
   val named : string -> t option
 
   val anonymous_root : t
+
+  module Infix : Comparable.OPS with type t = t
 end = struct
-  type t =
-    | Named     of string
-    | Anonymous of Path.t
+  module T = struct
+    type t =
+      | Named     of string
+      | Anonymous of Path.t
+
+    let compare a b =
+      match a, b with
+      | Named     x, Named     y -> String.compare x y
+      | Anonymous x, Anonymous y -> Path.compare   x y
+      | Named     _, Anonymous _ -> Lt
+      | Anonymous _, Named     _ -> Gt
+  end
+
+  include T
+
+  module Infix = Comparable.Operators(T)
 
   let anonymous_root = Anonymous Path.root
-
-  let compare a b =
-    match a, b with
-    | Named     x, Named     y -> String.compare x y
-    | Anonymous x, Anonymous y -> Path.compare   x y
-    | Named     _, Anonymous _ -> Lt
-    | Anonymous _, Named     _ -> Gt
 
   let to_string_hum = function
     | Named     s -> s
@@ -305,6 +313,7 @@ let default_name ~dir ~packages =
   | None -> Option.value_exn (Name.anonymous dir)
   | Some (_, pkg) ->
     let pkg =
+      let open Package.Name.Infix in
       Package.Name.Map.fold packages ~init:pkg ~f:(fun pkg acc ->
         if acc.Package.name <= pkg.Package.name then
           acc
@@ -320,23 +329,26 @@ let default_name ~dir ~packages =
         name
 
 let name ~dir ~packages =
-  field_o "name" Name.named_of_sexp >>= function
-  | Some x -> return x
-  | None   -> return (default_name ~dir ~packages)
+  let%map name = field_o "name" Name.named_of_sexp in
+  match name with
+  | Some x -> x
+  | None   -> default_name ~dir ~packages
 
 let parse ~dir ~lang ~packages ~file =
   fields
-    (name ~dir ~packages >>= fun name ->
-     field_o "version" string >>= fun version ->
-     multi_field "using"
-       (loc >>= fun loc ->
-        located string >>= fun name ->
-        located Syntax.Version.t >>= fun ver ->
-        (* We don't parse the arguments quite yet as we want to set
-           the version of extensions before parsing them. *)
-        capture >>= fun parse_args ->
-        return (Extension.instantiate ~loc ~parse_args name ver))
-     >>= fun extensions ->
+    (let%map name = name ~dir ~packages
+     and version = field_o "version" string
+     and extensions =
+       multi_field "using"
+         (let%map loc = loc
+          and name = located string
+          and ver = located Syntax.Version.t
+          and parse_args = capture
+          in
+          (* We don't parse the arguments quite yet as we want to set
+             the version of extensions before parsing them. *)
+          Extension.instantiate ~loc ~parse_args name ver)
+     in
      match
        String.Map.of_list
          (List.map extensions ~f:(fun (e : Extension.instance) ->
@@ -359,15 +371,14 @@ let parse ~dir ~lang ~packages ~file =
               ext.parse_args
                 (Sexp.Of_sexp.set_many parsing_context ext.extension.stanzas)))
        in
-       return
-         { kind = Dune
-         ; name
-         ; root = get_local_path dir
-         ; version
-         ; packages
-         ; stanza_parser = Sexp.Of_sexp.(set_many parsing_context (sum stanzas))
-         ; project_file
-         })
+       { kind = Dune
+       ; name
+       ; root = get_local_path dir
+       ; version
+       ; packages
+       ; stanza_parser = Sexp.Of_sexp.(set_many parsing_context (sum stanzas))
+       ; project_file
+       })
 
 let load_dune_project ~dir packages =
   let file = Path.relative dir filename in
@@ -389,9 +400,10 @@ let make_jbuilder_project ~dir packages =
 let read_name file =
   load file ~f:(fun _lang ->
     fields
-      (field_o "name" string >>= fun name ->
-       junk_everything >>= fun () ->
-       return name))
+      (let%map name = field_o "name" string
+       and () = junk_everything
+       in
+       name))
 
 let load ~dir ~files =
   let packages =

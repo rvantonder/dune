@@ -1,15 +1,21 @@
 open Import
 
 module Name = struct
-  type t = string
+  module T = struct
+    type t = string
+    let compare = compare
+  end
+
+  include T
 
   let t = Sexp.atom
 
   let add_suffix = (^)
 
-  let compare = compare
   let of_string = String.capitalize
   let to_string x = x
+
+  let uncapitalize = String.uncapitalize
 
   let pp = Format.pp_print_string
   let pp_quote fmt x = Format.fprintf fmt "%S" x
@@ -17,6 +23,7 @@ module Name = struct
   module Set = String.Set
   module Map = String.Map
   module Top_closure = Top_closure.String
+  module Infix = Comparable.Operators(T)
 end
 
 module Syntax = struct
@@ -25,26 +32,11 @@ end
 
 module File = struct
   type t =
-    { name : string
+    { path   : Path.t
     ; syntax : Syntax.t
     }
 
-  let to_ocaml t =
-    match t.syntax with
-    | OCaml -> Exn.code_error "to_ocaml: can only convert reason Files"
-                 ["t.name", Sexp.To_sexp.string t.name]
-    | Reason ->
-      { syntax = OCaml
-      ; name =
-          let base, ext = Filename.split_extension t.name in
-          base ^ ".re" ^
-          (match Filename.extension t.name with
-           | ".re" -> ".ml"
-           | ".rei" -> ".mli"
-           | _ -> Exn.code_error "to_ocaml: unrecognized extension"
-                    [ "name", Sexp.To_sexp.string t.name
-                    ; "ext", Sexp.To_sexp.string ext ])
-      }
+  let make syntax path = { syntax; path }
 end
 
 type t =
@@ -52,6 +44,7 @@ type t =
   ; impl     : File.t option
   ; intf     : File.t option
   ; obj_name : string
+  ; pp       : (unit, string list) Build.t option
   }
 
 let name t = t.name
@@ -72,7 +65,7 @@ let make ?impl ?intf ?obj_name name =
     match obj_name with
     | Some s -> s
     | None ->
-      let fn = file.name in
+      let fn = Path.basename file.path in
       match String.index fn '.' with
       | None   -> fn
       | Some i -> String.sub fn ~pos:0 ~len:i
@@ -81,23 +74,24 @@ let make ?impl ?intf ?obj_name name =
   ; impl
   ; intf
   ; obj_name
+  ; pp = None
   }
 
 let real_unit_name t = Name.of_string (Filename.basename t.obj_name)
 
 let has_impl t = Option.is_some t.impl
 
-let file t ~dir (kind : Ml_kind.t) =
+let file t (kind : Ml_kind.t) =
   let file =
     match kind with
     | Impl -> t.impl
     | Intf -> t.intf
   in
-  Option.map file ~f:(fun f -> Path.relative dir f.name)
+  Option.map file ~f:(fun f -> f.path)
 
 let obj_file t ~obj_dir ~ext = Path.relative obj_dir (t.obj_name ^ ext)
 
-let cm_source t ~dir kind = file t ~dir (Cm_kind.source kind)
+let cm_source t kind = file t (Cm_kind.source kind)
 
 let cm_file_unsafe t ~obj_dir kind =
   obj_file t ~obj_dir ~ext:(Cm_kind.ext kind)
@@ -131,3 +125,13 @@ let map_files t ~f =
     impl = Option.map t.impl ~f:(f Ml_kind.Impl)
   ; intf = Option.map t.intf ~f:(f Ml_kind.Intf)
   }
+
+let dir t =
+  let file =
+    match t.intf with
+    | Some x -> x
+    | None -> Option.value_exn t.impl
+  in
+  Path.parent_exn file.path
+
+let set_pp t pp = { t with pp }

@@ -3,7 +3,7 @@ open! Import
 include Sub_system_intf
 
 module Register_backend(M : Backend) = struct
-  include Jbuild.Sub_system_info.Register(M.Info)
+  include Dune_file.Sub_system_info.Register(M.Info)
   include Lib.Sub_system.Register(struct
       include M
       type Lib.Sub_system.t += T of t
@@ -107,7 +107,7 @@ module Register_backend(M : Backend) = struct
     let open Result.O in
     written_by_user_or_scan ~written_by_user ~to_scan
     >>= fun backends ->
-    wrap (Result.concat_map backends ~f:replaces)
+    wrap (Result.List.concat_map backends ~f:replaces)
     >>= fun replaced_backends ->
     match
       Set.diff (Set.of_list backends) (Set.of_list replaced_backends)
@@ -121,7 +121,7 @@ type Lib.Sub_system.t +=
     Gen of (Library_compilation_context.t -> unit)
 
 module Register_end_point(M : End_point) = struct
-  include Jbuild.Sub_system_info.Register(M.Info)
+  include Dune_file.Sub_system_info.Register(M.Info)
 
   let gen info (c : Library_compilation_context.t) =
     let open Result.O in
@@ -131,7 +131,7 @@ module Register_end_point(M : End_point) = struct
       (match M.Info.backends info with
        | None -> Ok None
        | Some l ->
-         Result.all (List.map l ~f:(M.Backend.resolve (Scope.libs c.scope)))
+         Result.List.all (List.map l ~f:(M.Backend.resolve (Scope.libs c.scope)))
          >>| Option.some)
       >>= fun written_by_user ->
       M.Backend.Selection_error.or_exn ~loc:(M.Info.loc info)

@@ -2,6 +2,7 @@
 module Local : sig
   type t
   val sexp_of_t : t -> Sexp.t
+  val equal : t -> t -> bool
 end
 
 (** In the outside world *)
@@ -30,6 +31,8 @@ val sexp_of_t : t Sexp.To_sexp.t
 
 val compare : t -> t -> Ordering.t
 (** a directory is smaller than its descendants *)
+
+val equal : t -> t -> bool
 
 module Set : sig
   include Set.S with type elt = t
@@ -140,6 +143,7 @@ val rm_rf : t -> unit
 val mkdir_p : t -> unit
 
 val extension : t -> string
+val split_extension : t -> t * string
 
 val pp : Format.formatter -> t -> unit
 val pp_debug : Format.formatter -> t -> unit

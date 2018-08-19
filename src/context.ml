@@ -18,6 +18,13 @@ module Kind = struct
                            ])
 end
 
+module Env_nodes = struct
+  type t =
+    { context: Dune_env.Stanza.t option
+    ; workspace: Dune_env.Stanza.t option
+    }
+end
+
 type t =
   { name                    : string
   ; kind                    : Kind.t
@@ -26,6 +33,7 @@ type t =
   ; for_host                : t option
   ; implicit                : bool
   ; build_dir               : Path.t
+  ; env_nodes               : Env_nodes.t
   ; path                    : Path.t list
   ; toplevel_path           : Path.t option
   ; ocaml_bin               : Path.t
@@ -42,7 +50,7 @@ type t =
   ; natdynlink_supported    : bool
   ; ocaml_config            : Ocaml_config.t
   ; version_string          : string
-  ; version                 : int * int * int
+  ; version                 : Ocaml_version.t
   ; stdlib_dir              : Path.t
   ; ccomp_type              : string
   ; c_compiler              : string
@@ -130,14 +138,15 @@ let ocamlpath_sep =
   else
     Bin.path_sep
 
-let create ~(kind : Kind.t) ~path ~env ~name ~merlin ~targets ~profile () =
+let create ~(kind : Kind.t) ~path ~env ~env_nodes ~name ~merlin ~targets
+      ~profile () =
   let opam_var_cache = Hashtbl.create 128 in
   (match kind with
    | Opam { root; _ } ->
      Hashtbl.add opam_var_cache "root" root
    | Default -> ());
   let prog_not_found_in_path prog =
-    Utils.program_not_found prog ~context:name
+    Utils.program_not_found prog ~context:name ~loc:None
   in
   let which_cache = Hashtbl.create 128 in
   let which x = which ~cache:which_cache ~path x in
@@ -265,16 +274,16 @@ let create ~(kind : Kind.t) ~path ~env ~name ~merlin ~targets ~profile () =
          ocaml_config_ok_exn
            (Ocaml_config.Vars.of_lines lines >>= Ocaml_config.make))
     >>= fun (findlib_path, ocfg) ->
-    let version = Ocaml_config.version ocfg in
+    let version = Ocaml_version.of_ocaml_config ocfg in
     let env =
-      (* See comment in ansi_color.ml for setup_env_for_colors. For
-         OCaml < 4.05, OCAML_COLOR is not supported so we use
-         OCAMLPARAM. OCaml 4.02 doesn't support 'color' in OCAMLPARAM,
-         so we just don't force colors with 4.02. *)
+      (* See comment in ansi_color.ml for setup_env_for_colors.
+         For versions where OCAML_COLOR is not supported, but 'color' is in
+         OCAMLPARAM, use the latter.
+         If 'color' is not supported, we just don't force colors with 4.02. *)
       if !Clflags.capture_outputs
       && Lazy.force Colors.stderr_supports_colors
-      && version >= (4, 03, 0)
-      && version <  (4, 05, 0) then
+      && Ocaml_version.supports_color_in_ocamlparam version
+      && not (Ocaml_version.supports_ocaml_color version) then
         let value =
           match Env.get env "OCAMLPARAM" with
           | None -> "color=always,_"
@@ -323,8 +332,8 @@ let create ~(kind : Kind.t) ~path ~env ~name ~merlin ~targets ~profile () =
     in
     let stdlib_dir = Path.of_string (Ocaml_config.standard_library ocfg) in
     let natdynlink_supported = Ocaml_config.natdynlink_supported ocfg in
-    let version        = Ocaml_config.version ocfg        in
     let version_string = Ocaml_config.version_string ocfg in
+    let version        = Ocaml_version.of_ocaml_config ocfg in
     let arch_sixtyfour = Ocaml_config.word_size ocfg = 64 in
     Fiber.return
       { name
@@ -332,6 +341,7 @@ let create ~(kind : Kind.t) ~path ~env ~name ~merlin ~targets ~profile () =
       ; kind
       ; profile
       ; merlin
+      ; env_nodes
       ; for_host = host
       ; build_dir
       ; path
@@ -407,13 +417,14 @@ let create ~(kind : Kind.t) ~path ~env ~name ~merlin ~targets ~profile () =
 
 let opam_config_var t var = opam_config_var ~env:t.env ~cache:t.opam_var_cache var
 
-let default ?(merlin=true) ~env ~targets () =
-  create ~kind:Default ~path:Bin.path ~env ~name:"default" ~merlin ~targets ()
+let default ?(merlin=true) ~env_nodes ~env ~targets () =
+  create ~kind:Default ~path:Bin.path ~env ~env_nodes ~name:"default"
+    ~merlin ~targets ()
 
-let create_for_opam ?root ~env ~targets ~profile ~switch ~name
+let create_for_opam ?root ~env ~env_nodes ~targets ~profile ~switch ~name
       ?(merlin=false) () =
   match Bin.opam with
-  | None -> Utils.program_not_found "opam"
+  | None -> Utils.program_not_found "opam" ~loc:None
   | Some fn ->
     (match root with
      | Some root -> Fiber.return root
@@ -448,14 +459,23 @@ let create_for_opam ?root ~env ~targets ~profile ~switch ~name
       | Some s -> Bin.parse_path s
     in
     let env = Env.extend env ~vars in
-    create ~kind:(Opam { root; switch }) ~profile ~targets ~path ~env ~name
-      ~merlin ()
+    create ~kind:(Opam { root; switch }) ~profile ~targets ~path ~env ~env_nodes
+      ~name ~merlin ()
 
-let create ?merlin ~env def =
+let create ?merlin ?workspace_env ~env def =
+  let env_nodes context =
+    { Env_nodes.
+      context
+    ; workspace = workspace_env
+    }
+  in
   match (def : Workspace.Context.t) with
-  | Default { targets; profile; _ } -> default ~env ~profile ~targets ?merlin ()
-  | Opam { name; switch; root; targets; profile; _ } ->
-    create_for_opam ?root ~env ~profile ~switch ~name ?merlin ~targets ()
+  | Default { targets; profile; env = env_node ; loc = _ } ->
+    default ~env ~env_nodes:(env_nodes env_node) ~profile ~targets ?merlin ()
+  | Opam { base = { targets ; profile ; env = env_node ; loc = _ }
+         ; name; switch; root; merlin = _ } ->
+    create_for_opam ?root ~env_nodes:(env_nodes env_node) ~env ~profile
+      ~switch ~name ?merlin ~targets ()
 
 let which t s = which ~cache:t.which_cache ~path:t.path s
 

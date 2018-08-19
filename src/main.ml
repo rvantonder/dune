@@ -6,7 +6,7 @@ let () = Inline_tests.linkme
 type setup =
   { build_system : Build_system.t
   ; contexts     : Context.t list
-  ; scontexts    : Super_context.t String_map.t
+  ; scontexts    : Super_context.t String.Map.t
   ; packages     : Package.t Package.Name.Map.t
   ; file_tree    : File_tree.t
   ; env          : Env.t
@@ -73,11 +73,12 @@ let setup ?(log=Log.no_log)
 
   Fiber.parallel_map workspace.contexts ~f:(fun ctx_def ->
     let name = Workspace.Context.name ctx_def in
-    Context.create ctx_def ~env ~merlin:(workspace.merlin_context = Some name))
+    Context.create ?workspace_env:workspace.env
+      ctx_def ~env ~merlin:(workspace.merlin_context = Some name))
   >>= fun contexts ->
   let contexts = List.concat contexts in
   List.iter contexts ~f:(fun (ctx : Context.t) ->
-    Log.infof log "@[<1>Jbuilder context:@,%a@]@." (Sexp.pp Dune)
+    Log.infof log "@[<1>Dune context:@,%a@]@." (Sexp.pp Dune)
       (Context.sexp_of_t ctx));
   let rule_done  = ref 0 in
   let rule_total = ref 0 in
@@ -168,6 +169,7 @@ let auto_concurrency =
              | None -> loop rest
              | Some prog ->
                Process.run_capture (Accept All) prog args ~env:Env.initial
+                 ~stderr_to:(File Config.dev_null)
                >>= function
                | Error _ -> loop rest
                | Ok s ->

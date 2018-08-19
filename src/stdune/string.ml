@@ -7,6 +7,7 @@ include struct
   let uncapitalize_ascii = String.uncapitalize
   let uppercase_ascii    = String.uppercase
   let lowercase_ascii    = String.lowercase
+  let equal (a:string) b = Pervasives.(=) a b
 end
 
 include StringLabels
@@ -202,7 +203,13 @@ let maybe_quoted s =
     Printf.sprintf {|"%s"|} escaped
 
 module Set = Set.Make(T)
-module Map = Map.Make(T)
+module Map = struct
+  include Map.Make(T)
+  let pp f fmt t =
+    Format.pp_print_list (fun fmt (k, v) ->
+      Format.fprintf fmt "@[<hov 2>(%s@ =@ %a)@]" k f v
+    ) fmt (to_list t)
+end
 module Table = Hashtbl.Make(T)
 
 let enumerate_gen s =

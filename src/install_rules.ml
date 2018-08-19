@@ -1,5 +1,5 @@
 open Import
-open Jbuild
+open Dune_file
 open Build.O
 open! No_io
 
@@ -7,31 +7,12 @@ module type Params = sig
   val sctx : Super_context.t
 end
 
-module type Install_params = sig
-  include Params
-  val module_names_of_lib : Library.t -> dir:Path.t -> Module.t list
-  val mlds_of_dir : Documentation.t -> dir:Path.t -> Path.t list
-end
-
-module Archives(P : Params) = struct
-  let ctx = Super_context.context P.sctx
-
-  let lib_archive (lib : Library.t) ~dir ~ext =
-    Path.relative dir (lib.name ^ ext)
-
-  let stubs_archive lib ~dir =
-    Library.stubs_archive lib ~dir ~ext_lib:ctx.ext_lib
-
-  let dll (lib : Library.t) ~dir =
-    Path.relative dir (sprintf "dll%s_stubs%s" lib.name ctx.ext_dll)
-end
-
-module Gen(P : Install_params) = struct
+module Gen(P : Params) = struct
   module Alias = Build_system.Alias
   module SC = Super_context
   open P
 
-  include (Archives(P))
+  let ctx = Super_context.context sctx
 
   let lib_dune_file ~dir ~name =
     Path.relative dir (name ^ ".dune")
@@ -134,7 +115,8 @@ module Gen(P : Install_params) = struct
            >>>
            Build.write_file_dyn meta)))
 
-  let lib_install_files ~dir ~sub_dir ~name ~scope ~dir_kind (lib : Library.t) =
+  let lib_install_files ~dir_contents ~dir ~sub_dir ~name ~scope ~dir_kind
+        (lib : Library.t) =
     let obj_dir = Utils.library_object_directory ~dir lib.name in
     let make_entry section ?dst fn =
       Install.Entry.make section fn
@@ -154,7 +136,18 @@ module Gen(P : Install_params) = struct
     in
     let if_ cond l = if cond then l else [] in
     let files =
-      let modules = module_names_of_lib lib ~dir in
+      let modules =
+        let { Dir_contents.Library_modules.modules; alias_module; _ } =
+          Dir_contents.modules_of_library dir_contents
+            ~name:(Library.best_name lib)
+        in
+        let modules =
+          match alias_module with
+          | None -> modules
+          | Some m -> Module.Name.Map.add modules m.name m
+        in
+        Module.Name.Map.values modules
+      in
       List.concat
         [ List.concat_map modules ~f:(fun m ->
             List.concat
@@ -164,18 +157,19 @@ module Gen(P : Install_params) = struct
               ; List.filter_map Ml_kind.all ~f:(Module.cmt_file m ~obj_dir)
               ; List.filter_map [m.intf;m.impl] ~f:(function
                   | None -> None
-                  | Some f -> Some (Path.relative dir f.name))
+                  | Some f -> Some f.path)
               ])
-        ; if_ byte [ lib_archive ~dir lib ~ext:".cma" ]
-        ; if_ (Library.has_stubs lib) [ stubs_archive ~dir lib ]
+        ; if_ byte [ Library.archive ~dir lib ~ext:".cma" ]
+        ; if_ (Library.has_stubs lib)
+            [ Library.stubs_archive ~dir lib ~ext_lib:ctx.ext_lib ]
         ; if_ native
             (let files =
-               [ lib_archive ~dir lib ~ext:".cmxa"
-               ; lib_archive ~dir lib ~ext:ctx.ext_lib
+               [ Library.archive ~dir lib ~ext:".cmxa"
+               ; Library.archive ~dir lib ~ext:ctx.ext_lib
                ]
              in
              if ctx.natdynlink_supported && lib.dynlink then
-               files @ [ lib_archive ~dir lib ~ext:".cmxs" ]
+               files @ [ Library.archive ~dir lib ~ext:".cmxs" ]
              else
                files)
         ; List.map lib.buildable.js_of_ocaml.javascript_files ~f:(Path.relative dir)
@@ -183,7 +177,10 @@ module Gen(P : Install_params) = struct
             Path.relative dir (fn ^ ".h"))
         ]
     in
-    let dlls  = if_ (byte && Library.has_stubs lib && lib.dynlink) [dll ~dir lib] in
+    let dlls  =
+      if_ (byte && Library.has_stubs lib && lib.dynlink)
+        [Library.dll ~dir lib ~ext_dll:ctx.ext_dll]
+    in
     let execs =
       match lib.kind with
       | Normal | Ppx_deriver -> []
@@ -305,11 +302,12 @@ module Gen(P : Install_params) = struct
     let entries_per_package =
       List.concat_map (SC.stanzas_to_consider_for_install sctx)
         ~f:(fun { SC.Installable. dir; stanza; kind = dir_kind; scope; _ } ->
+          let dir_contents = Dir_contents.get sctx ~dir in
           match stanza with
-          | Library ({ public = Some { package; sub_dir; name; _ }
+          | Library ({ public = Some { package; sub_dir; name = (_, name); _ }
                      ; _ } as lib) ->
             List.map (lib_install_files ~dir ~sub_dir ~name lib ~scope
-                        ~dir_kind)
+                        ~dir_kind ~dir_contents)
               ~f:(fun x -> package.name, x)
           | Install { section; files; package}->
             List.map files ~f:(fun { Install_conf. src; dst } ->
@@ -321,7 +319,7 @@ module Gen(P : Install_params) = struct
                (Install.Entry.make
                   ~dst:(sprintf "odoc-pages/%s" (Path.basename mld))
                   Install.Section.Doc mld))
-            ) (mlds_of_dir d ~dir)
+            ) (Dir_contents.mlds dir_contents d)
           | _ -> [])
       |> Package.Name.Map.of_list_multi
     in

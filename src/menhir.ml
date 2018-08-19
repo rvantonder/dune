@@ -9,7 +9,7 @@ module SC = Super_context
 (* This signature describes the input of the functor [Run], which follows. *)
 
 type stanza =
-  Jbuild.Menhir.t
+  Dune_file.Menhir.t
 
 module type PARAMS = sig
 
@@ -71,7 +71,7 @@ module Run (P : PARAMS) = struct
   (* Find the menhir binary. *)
 
   let menhir_binary =
-    SC.resolve_program sctx "menhir" ~hint:"opam install menhir"
+    SC.resolve_program sctx "menhir" ~loc:None ~hint:"opam install menhir"
 
   (* [menhir args] generates a Menhir command line (a build action). *)
 
@@ -140,13 +140,13 @@ end
 
 (* The final glue. *)
 
-let targets (stanza : Jbuild.Menhir.t) =
+let targets (stanza : Dune_file.Menhir.t) =
   let f m = [m ^ ".ml"; m ^ ".mli"] in
   match stanza.merge_into with
   | Some m -> f m
   | None -> List.concat_map stanza.modules ~f
 
-let module_names (stanza : Jbuild.Menhir.t) =
+let module_names (stanza : Dune_file.Menhir.t) =
   match stanza.merge_into with
   | Some m -> [Module.Name.of_string m]
   | None -> List.map stanza.modules ~f:Module.Name.of_string
