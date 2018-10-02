@@ -23,9 +23,7 @@ module Hooks_manager = struct
     one_off_hooks := []
 end
 
-module End_of_build = struct
-  include Hooks_manager
-end
+module End_of_build = Hooks_manager
 
 module End_of_build_not_canceled = struct
   include Hooks_manager
